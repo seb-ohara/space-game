@@ -677,7 +677,7 @@ func _fire_enemy_turret(enemy: Dictionary) -> void:
 	var aim_angle: float = enemy.aim_angle
 	var direction := Vector2.from_angle(aim_angle)
 	var origin: Vector2 = enemy.position + mount.offset.rotated(float(enemy.heading) + PI / 2.0)
-	var shot := {"position": origin + direction * 13.0, "velocity": direction * 800.0, "life": 3.0, "friendly": false}
+	var shot := {"position": origin + direction * 13.0, "velocity": direction * 800.0, "friendly": false}
 	var cadence := 1.0
 	match mount.part.turret:
 		"machine_gun":
@@ -687,7 +687,6 @@ func _fire_enemy_turret(enemy: Dictionary) -> void:
 		"missile":
 			shot.merge({"kind": "rocket", "damage": 16.0, "rocket_heading": aim_angle, "age": 0.0})
 			shot.velocity = direction * 300.0
-			shot.life = 4.5
 			cadence = 1.7
 	projectiles.append(shot)
 	enemy.fire_cooldown = rng.randf_range(0.65, 1.05) * float(enemy.fire_interval) * cadence
@@ -744,7 +743,7 @@ func _update_combat(delta: float) -> void:
 			if part.get("turret", "") == "laser" and _turret_is_aimed(part, aim_position):
 				var origin := _turret_world_position(part)
 				var direction := Vector2.from_angle(_turret_angle(part))
-				projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 800.0, "life": 1.8, "friendly": true, "damage": MODULES.TYPES[part.turret].weapon})
+				projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 800.0, "friendly": true, "damage": MODULES.TYPES[part.turret].weapon})
 				fired = true
 		if fired:
 			player_fire_cooldown = 0.4
@@ -754,7 +753,7 @@ func _update_combat(delta: float) -> void:
 			if part.get("turret", "") == "machine_gun" and _turret_is_aimed(part, aim_position):
 				var origin := _turret_world_position(part)
 				var direction := Vector2.from_angle(_turret_angle(part)).rotated(rng.randf_range(-0.035, 0.035))
-				projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 1200.0 + velocity * 0.25, "life": 1.25, "friendly": true, "damage": 4.0, "kind": "bullet"})
+				projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 1200.0 + velocity * 0.25, "friendly": true, "damage": 4.0, "kind": "bullet"})
 				fired = true
 		if fired:
 			machine_gun_cooldown = 0.10
@@ -764,7 +763,7 @@ func _update_combat(delta: float) -> void:
 			if part.get("turret", "") == "missile" and _turret_is_aimed(part, aim_position):
 				var origin := _turret_world_position(part)
 				var direction := Vector2.from_angle(_turret_angle(part))
-				projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 300.0 + velocity, "life": 4.5, "friendly": true, "damage": MODULES.TYPES.missile.weapon, "kind": "rocket", "target": {}, "rocket_heading": direction.angle(), "age": 0.0})
+				projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 300.0 + velocity, "friendly": true, "damage": MODULES.TYPES.missile.weapon, "kind": "rocket", "target": {}, "rocket_heading": direction.angle(), "age": 0.0})
 				fired = true
 		if fired:
 			rocket_cooldown = 1.2
@@ -774,7 +773,7 @@ func _update_combat(delta: float) -> void:
 			_update_rocket(shot, delta)
 		var previous: Vector2 = shot.position
 		shot.position += shot.velocity * delta
-		shot.life -= delta
+		var hit := false
 		if shot.friendly:
 			var hit_index := -1
 			var hit_point: Variant = null
@@ -804,7 +803,7 @@ func _update_combat(delta: float) -> void:
 				enemy.shield -= absorbed
 				enemy.shield_delay = 4.0
 				enemy.health -= damage - absorbed
-				shot.life = 0.0
+				hit = true
 				if enemy.health <= 0:
 					enemy.alive = false
 					_break_up_enemy(enemy)
@@ -825,7 +824,7 @@ func _update_combat(delta: float) -> void:
 				player_shield -= absorbed
 				player_shield_delay = 4.0
 				player_hull -= damage - absorbed
-				shot.life = 0.0
+				hit = true
 				if player_hull <= 0:
 					player_hull = _player_max_hull()
 					player_shield = _player_max_shield()
@@ -840,7 +839,7 @@ func _update_combat(delta: float) -> void:
 					machine_gun_active = false
 					mining = false
 					invulnerability = 3.0
-		if shot.life <= 0.0:
+		if hit or not Rect2(Vector2.ZERO, WORLD_SIZE).has_point(shot.position):
 			projectiles.remove_at(i)
 	if living == 0:
 		if enemy_wave_timer < 0.0:
@@ -1013,7 +1012,7 @@ func _try_launch_rockets() -> void:
 		if part.get("turret", "") == "missile" and _turret_is_aimed(part, enemy.position):
 			var origin := _turret_world_position(part)
 			var direction := Vector2.from_angle(_turret_angle(part))
-			projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 300.0 + velocity, "life": 4.5, "friendly": true, "damage": MODULES.TYPES.missile.weapon, "kind": "rocket", "target": enemy, "rocket_heading": direction.angle(), "age": 0.0})
+			projectiles.append({"position": origin + direction * 16.0, "velocity": direction * 300.0 + velocity, "friendly": true, "damage": MODULES.TYPES.missile.weapon, "kind": "rocket", "target": enemy, "rocket_heading": direction.angle(), "age": 0.0})
 			fired = true
 	if fired:
 		rocket_pending = false
@@ -1436,11 +1435,6 @@ func _draw_aim_indicators(size: Vector2) -> void:
 		line_color.a = 0.28
 		draw_line(start, tip, line_color, 1.0, true)
 		draw_arc(tip, 5.0, 0.0, TAU, 20, color, 1.5, true)
-	# The larger reticle marks the requested aim; small circles show actual turret aim.
-	draw_arc(pointer, 11.0, 0.0, TAU, 32, color, 1.5, true)
-	for direction in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
-		draw_line(pointer + direction * 7.0, pointer + direction * 15.0, color, 1.5, true)
-	draw_circle(pointer, 1.5, color)
 
 func _draw_mining_beams() -> void:
 	if not mining or selected_asteroid < 0 or selected_asteroid >= asteroids.size():
