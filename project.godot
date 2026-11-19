@@ -12,7 +12,6 @@ config_version=5
 
 config/name="Drift — Space Flight Prototype"
 run/main_scene="res://main.tscn"
-run/max_fps=0
 config/features=PackedStringArray("4.7")
 
 [display]
@@ -20,8 +19,8 @@ config/features=PackedStringArray("4.7")
 window/size/viewport_width=1920
 window/size/viewport_height=1080
 window/size/mode=3
-window/vsync/vsync_mode=0
 window/stretch/mode="canvas_items"
+window/vsync/vsync_mode=0
 
 [rendering]
 
