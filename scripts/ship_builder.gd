@@ -9,7 +9,7 @@ var parts: Array = []
 var saved_parts: Array = []
 var exit_dialog: ConfirmationDialog
 var saving_before_exit := false
-var selected_type := "hull"
+var selected_type := "retro_spine"
 var interior_view := false
 var part_rotation := 0
 var part_flipped := false
@@ -81,6 +81,13 @@ func _ready() -> void:
 	column.custom_minimum_size = Vector2(260, 0)
 	column.add_theme_constant_override("separation", 4)
 	scroll.add_child(column)
+	var delete_all := Button.new()
+	delete_all.name = "DeleteAll"
+	delete_all.text = "Delete All"
+	delete_all.custom_minimum_size = Vector2(0, 36)
+	delete_all.focus_mode = Control.FOCUS_NONE
+	delete_all.pressed.connect(_delete_all_parts)
+	column.add_child(delete_all)
 	var category := ""
 	for id in MODULES.ORDER:
 		var item: Dictionary = MODULES.TYPES[id]
@@ -99,7 +106,15 @@ func _ready() -> void:
 		button.focus_mode = Control.FOCUS_NONE
 		button.toggle_mode = true
 		button.button_pressed = id == selected_type
-		if MODULES.HULL_TEXTURES.has(id) or MODULES.DECORATION_TEXTURES.has(id):
+		if id == "retro_wedge":
+			button.icon = MODULES.RETRO_WEDGE_ICON
+			button.expand_icon = true
+			button.add_theme_constant_override("icon_max_width", 26)
+		elif id == "retro_turret_base":
+			button.icon = MODULES.RETRO_TURRET_BASE_TEXTURE
+			button.expand_icon = true
+			button.add_theme_constant_override("icon_max_width", 26)
+		elif MODULES.HULL_TEXTURES.has(id) or MODULES.DECORATION_TEXTURES.has(id):
 			button.icon = MODULES.HULL_TEXTURES.get(id, MODULES.DECORATION_TEXTURES.get(id))
 			button.expand_icon = true
 			button.add_theme_constant_override("icon_max_width", 26)
@@ -231,10 +246,7 @@ func _update_palette() -> void:
 func _toggle_view() -> void:
 	interior_view = not interior_view
 	interior_button.text = "View: Interior" if interior_view else "View: Exterior"
-	var needs_deck := interior_view and not MODULES.has_command_deck(parts)
-	selected_type = ("command_deck" if needs_deck else "reactor") if interior_view else "hull"
-	if needs_deck:
-		part_rotation -= part_rotation % 2
+	selected_type = "reactor" if interior_view else "retro_spine"
 	select_mode = false
 	select_button.button_pressed = false
 	select_button.disabled = interior_view
@@ -247,8 +259,6 @@ func _toggle_view() -> void:
 	erasing = false
 	_update_palette()
 	status = "Place equipment on the hull footprint." if interior_view else "Build the ship's outside shape."
-	if needs_deck:
-		status = "Click the left of three free hull cells to install the command deck."
 	queue_redraw()
 
 func _create_design_library() -> void:
@@ -335,7 +345,8 @@ func _refresh_design_list() -> void:
 	var names := library_entries.keys()
 	names.sort()
 	for name in names:
-		design_list.add_item(str(name))
+		if _safe_saved_design(library_entries[name]):
+			design_list.add_item(str(name))
 
 func _write_design_library(entries: Dictionary) -> bool:
 	var temporary := library_path + ".tmp"
@@ -438,9 +449,30 @@ func _randomize_ship() -> void:
 	random_backup = parts.duplicate(true)
 	has_random_backup = true
 	undo_button.disabled = false
+	undo_button.text = "Undo random"
 	parts = generated
 	selected_parts.clear()
 	status = "Random ship created. Undo random restores your previous design."
+	queue_redraw()
+
+func _delete_all_parts() -> void:
+	if parts.is_empty():
+		return
+	random_backup = parts.duplicate(true)
+	has_random_backup = true
+	undo_button.disabled = false
+	undo_button.text = "Undo delete"
+	parts.clear()
+	selected_parts.clear()
+	painting = false
+	erasing = false
+	erase_area_active = false
+	stretching = false
+	stretch_index = -1
+	marquee_active = false
+	moving_selection = false
+	move_delta = Vector2i.ZERO
+	status = "All parts removed. Undo delete restores your design."
 	queue_redraw()
 
 func _undo_random() -> void:
@@ -450,6 +482,7 @@ func _undo_random() -> void:
 	random_backup.clear()
 	has_random_backup = false
 	undo_button.disabled = true
+	undo_button.text = "Undo random"
 	selected_parts.clear()
 	status = "Previous design restored."
 	queue_redraw()
@@ -476,7 +509,10 @@ func _select_part(id: String) -> void:
 	select_mode = false
 	for key in palette_buttons:
 		palette_buttons[key].button_pressed = key == id
-	if id == "command_deck":
+	if id == "retro_bridge":
+		part_rotation -= part_rotation % 2
+		status = "Place the bridge over an exterior block. Right-click to remove it."
+	elif id == "command_deck":
 		part_rotation -= part_rotation % 2
 		status = "Click the left of three free hull cells. R reverses the deck. Right-click any slot to remove it."
 	elif MODULES.POWER_ADJACENCY_BONUS.has(id):
@@ -486,7 +522,7 @@ func _select_part(id: String) -> void:
 	elif MODULES.is_armour(id):
 		status = "Drag %s over existing hull. Shift-drag resizes · R rotates · F flips." % MODULES.TYPES[id].name.to_lower()
 	elif MODULES.DECORATION_TEXTURES.has(id):
-		status = "Click a free slot beside the hull. R changes the preferred mount · right-click removes details." if id in MODULES.EDGE_DECORATIONS else "Click a flat hull or armour block. R rotates · F flips · right-click removes details."
+		status = "Click anywhere to place the antenna. R rotates · F flips · right-click removes details." if id == "retro_antenna" else "Click a hull block. R rotates · F flips · right-click removes details."
 	elif MODULES.can_stretch(id):
 		status = "Click to place %s. Shift-drag to size or resize. Right-click removes." % MODULES.TYPES[id].name
 	elif id in MODULES.TURRETS:
@@ -693,7 +729,7 @@ func _finish_stretch(position: Vector2) -> void:
 	queue_redraw()
 
 func _interior_placement_error(anchors: Array[Vector2i], kind: String) -> String:
-	if kind == "command_deck" and MODULES.has_command_deck(parts):
+	if kind in ["command_deck", "retro_bridge"] and MODULES.has_command_deck(parts):
 		return "A ship can have only one command deck."
 	if parts.size() + anchors.size() > MODULES.MAX_COMPONENTS:
 		return "A ship can have up to %d components." % MODULES.MAX_COMPONENTS
@@ -703,7 +739,7 @@ func _interior_placement_error(anchors: Array[Vector2i], kind: String) -> String
 				return "The command deck would extend outside the grid."
 			var hull_index := _index_at(location, "exterior")
 			if hull_index < 0 or not MODULES.supports_interior(parts[hull_index].type):
-				return "The command deck needs three adjacent hull cells." if kind == "command_deck" else "Place interior equipment on a hull cell."
+				return "The command deck needs three adjacent hull cells." if kind in ["command_deck", "retro_bridge"] else "Place interior equipment on a hull cell."
 			if _index_at(location, "interior") >= 0:
 				return "That interior cell is occupied."
 	return ""
@@ -760,11 +796,15 @@ func _decoration_placement_error(detail: Dictionary) -> String:
 	return ""
 
 func _decoration_plan(cell: Vector2i) -> Dictionary:
+	if selected_type == "retro_bridge" and MODULES.has_command_deck(parts):
+		return {"error":"A ship can have only one command deck or bridge."}
 	var detail := {"type":selected_type, "layer":"decoration", "x":cell.x, "y":cell.y, "rotation":part_rotation, "flip_x":part_flipped}
+	if selected_type == "retro_bridge":
+		detail.width = 1
 	var area := MODULES.footprint(detail)
 	var mirror := _mirrored_part(detail)
 	var mirror_area := MODULES.footprint(mirror)
-	var mirrored := symmetry_enabled and area != mirror_area
+	var mirrored := symmetry_enabled and area != mirror_area and selected_type != "retro_bridge"
 	if mirrored and area.intersects(mirror_area):
 		return {"error":"Centre the panel on the symmetry line or place it to one side."}
 	if parts.size() + (2 if mirrored else 1) > MODULES.MAX_COMPONENTS:
@@ -802,20 +842,20 @@ func _place_at(cell: Vector2i) -> void:
 		return
 	if symmetry_enabled and cell.x == 0:
 		var directional := selected_type == "triangle" or MODULES.ENGINE_NOZZLE_OFFSETS.has(selected_type)
-		var asymmetric := selected_type in ["wedge", "wedge_half", "wing", "cargo_corner"] or (selected_type == "cargo_edge" and part_rotation % 2 == 0) or (directional and part_rotation % 2 != 0)
+		var asymmetric := selected_type in ["wedge", "retro_wedge", "wedge_half", "wing", "cargo_corner"] or (selected_type == "cargo_edge" and part_rotation % 2 == 0) or (directional and part_rotation % 2 != 0)
 		if asymmetric:
 			status = "This orientation cannot be mirrored on the center line."
 			return
 	if interior_view:
 		var locations: Array[Vector2i] = [cell]
-		if symmetry_enabled and cell.x != 0 and selected_type != "command_deck":
+		if symmetry_enabled and cell.x != 0 and selected_type not in ["command_deck", "retro_bridge"]:
 			locations.append(Vector2i(-cell.x, cell.y))
 		var placement_error := _interior_placement_error(locations, selected_type)
 		if placement_error != "":
 			status = placement_error
 			return
 		var part := {"type":selected_type, "layer":"interior", "x":cell.x, "y":cell.y, "rotation":part_rotation, "flip_x":part_flipped}
-		if selected_type == "command_deck":
+		if selected_type in ["command_deck", "retro_bridge"]:
 			part.width = MODULES.COMMAND_DECK_WIDTH
 		parts.append(part)
 		if locations.size() == 2:
@@ -828,7 +868,7 @@ func _place_at(cell: Vector2i) -> void:
 			locations.append(Vector2i(-cell.x, cell.y))
 		for location in locations:
 			var index := _index_at(location)
-			if index < 0 or parts[index].type != "turret_base" or parts[index].has("turret"):
+			if index < 0 or parts[index].type not in MODULES.TURRET_BASE_TYPES or parts[index].has("turret"):
 				status = "Place turrets on empty turret bases."
 				return
 		for location in locations:
@@ -837,7 +877,7 @@ func _place_at(cell: Vector2i) -> void:
 		return
 	if _index_at(cell) >= 0:
 		return
-	if _index_at(cell, "decoration") >= 0:
+	if _index_at(cell, "decoration") >= 0 and parts[_index_at(cell, "decoration")].type != "retro_antenna":
 		status = "Remove the decoration before building in this slot."
 		return
 	if selected_type == "cockpit" and (parts.any(func(part: Dictionary) -> bool: return part.type == "cockpit") or (symmetry_enabled and cell.x != 0)):
@@ -850,7 +890,7 @@ func _place_at(cell: Vector2i) -> void:
 		if _index_at(reflected) >= 0:
 			status = "The mirrored cell is occupied."
 			return
-		if _index_at(reflected, "decoration") >= 0:
+		if _index_at(reflected, "decoration") >= 0 and parts[_index_at(reflected, "decoration")].type != "retro_antenna":
 			status = "Remove the decoration from the mirrored slot first."
 			return
 		placements[reflected] = _mirrored_part(primary)
@@ -887,7 +927,7 @@ func _hull_removal_error(cell: Vector2i) -> String:
 				var detail: Dictionary = part.duplicate()
 				detail.x = slot.x
 				detail.y = slot.y
-				if MODULES.decoration_mount(detail) == cell:
+				if detail.type != "retro_antenna" and MODULES.decoration_mount(detail) == cell:
 					return "Remove the detail attached to this block first."
 	return ""
 
@@ -935,12 +975,12 @@ func _remove_at(cell: Vector2i) -> void:
 		var detail_index := _index_at(cell, "decoration")
 		if detail_index >= 0:
 			var detail: Dictionary = parts[detail_index]
-			if detail.type == "armour_panel":
-				var mirror_index := _mirror_index(detail) if symmetry_enabled else -1
+			if detail.type in ["armour_panel", "retro_bridge"]:
+				var mirror_index := _mirror_index(detail) if symmetry_enabled and detail.type != "retro_bridge" else -1
 				if mirror_index >= 0:
 					parts.remove_at(mirror_index)
 				parts.erase(detail)
-				status = "Raised armour panel removed."
+				status = "%s removed." % MODULES.TYPES[detail.type].name
 				return
 			if MODULES.footprint(detail).get_area() > 1:
 				if symmetry_enabled and cell.x != 0:
@@ -974,7 +1014,7 @@ func _remove_at(cell: Vector2i) -> void:
 		_remove_blocks(index, cell)
 		return
 	var indices: Array[int] = [index]
-	if symmetry_enabled and kind != "command_deck" and cell.x != 0:
+	if symmetry_enabled and kind not in ["command_deck", "retro_bridge"] and cell.x != 0:
 		var mirror := _index_at(Vector2i(-cell.x, cell.y))
 		if mirror >= 0 and MODULES.footprint(parts[mirror]).get_area() == 1:
 			indices.append(mirror)
@@ -1006,7 +1046,7 @@ func _surface_moves_with_selection(detail: Dictionary) -> bool:
 	return true
 
 func _decoration_moves_with_selection(detail: Dictionary) -> bool:
-	if detail.type == "armour_panel":
+	if detail.type in ["armour_panel", "retro_bridge"]:
 		return _surface_moves_with_selection(detail)
 	var mount_index := _index_at(MODULES.decoration_mount(detail), "exterior")
 	return mount_index >= 0 and selected_parts.has(parts[mount_index])
@@ -1150,7 +1190,7 @@ func _input(event: InputEvent) -> void:
 			erasing = false
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:
-			part_rotation = (part_rotation + (2 if selected_type == "command_deck" else 1)) % 4
+			part_rotation = (part_rotation + (2 if selected_type in ["command_deck", "retro_bridge"] else 1)) % 4
 		elif event.keycode == KEY_F:
 			part_flipped = not part_flipped
 		else:
@@ -1378,7 +1418,7 @@ func _draw() -> void:
 			if MODULES.is_interior(part):
 				if valid_preview and i in preview_plan.replaced:
 					continue
-				var fills_cell: bool = part.type == "command_deck" or part.type in MODULES.CARGO_HOLD_TYPES
+				var fills_cell: bool = part.type in ["command_deck", "retro_bridge"] or part.type in MODULES.CARGO_HOLD_TYPES
 				var interior_scale := part_scale if fills_cell else part_scale * 0.83
 				var cell := Vector2i(int(part.x), int(part.y))
 				var part_position := center + Vector2(cell) * spacing
@@ -1458,7 +1498,7 @@ func _draw() -> void:
 			var size := MODULES.footprint({"type":selected_type, "rotation":part_rotation}).size
 			var top_left := center + (Vector2(cursor_cell) - Vector2.ONE * 0.5) * spacing
 			draw_rect(Rect2(top_left, Vector2(size) * spacing), Color("ff8d83"), false, 1.5)
-	elif show_cursor and interior_view and selected_type == "command_deck":
+	elif show_cursor and interior_view and selected_type in ["command_deck", "retro_bridge"]:
 		var anchors: Array[Vector2i] = [cursor_cell]
 		var anchor_position := center + Vector2(cursor_cell) * spacing
 		var available := _interior_placement_error(anchors, selected_type) == ""
@@ -1466,11 +1506,11 @@ func _draw() -> void:
 		if available:
 			MODULES.draw_part(self, {"type":selected_type, "rotation":part_rotation, "flip_x":part_flipped}, anchor_position, part_scale, 0.55)
 		draw_rect(footprint, Color("76ecff") if available else Color("ff8d83"), false, 1.5)
-	elif not paint_mode and not select_mode and not _armour_selected() and show_cursor and _index_at(cursor_cell) < 0 and (not interior_view or (_index_at(cursor_cell, "exterior") >= 0 and MODULES.supports_interior(parts[_index_at(cursor_cell, "exterior")].type))) and (interior_view or _index_at(cursor_cell, "decoration") < 0):
+	elif not paint_mode and not select_mode and not _armour_selected() and show_cursor and _index_at(cursor_cell) < 0 and (not interior_view or (_index_at(cursor_cell, "exterior") >= 0 and MODULES.supports_interior(parts[_index_at(cursor_cell, "exterior")].type))) and (interior_view or _index_at(cursor_cell, "decoration") < 0 or parts[_index_at(cursor_cell, "decoration")].type == "retro_antenna"):
 		MODULES.draw_part(self, {"type":selected_type, "rotation":part_rotation, "flip_x":part_flipped}, center + Vector2(cursor_cell) * spacing, part_scale, 0.4)
 		if symmetry_enabled and cursor_cell.x != 0:
 			var mirror := Vector2i(-cursor_cell.x, cursor_cell.y)
-			if _index_at(mirror) < 0 and (not interior_view or (_index_at(mirror, "exterior") >= 0 and MODULES.supports_interior(parts[_index_at(mirror, "exterior")].type))) and (interior_view or _index_at(mirror, "decoration") < 0):
+			if _index_at(mirror) < 0 and (not interior_view or (_index_at(mirror, "exterior") >= 0 and MODULES.supports_interior(parts[_index_at(mirror, "exterior")].type))) and (interior_view or _index_at(mirror, "decoration") < 0 or parts[_index_at(mirror, "decoration")].type == "retro_antenna"):
 				MODULES.draw_part(self, {"type":selected_type, "rotation":posmod(-part_rotation, 4), "flip_x":not part_flipped}, center + Vector2(mirror) * spacing, part_scale, 0.4)
 	for turret in mounted_turrets:
 		MODULES.draw_mounted_turret(self, turret.type, turret.position, part_scale, 0.28 if interior_view else 1.0)

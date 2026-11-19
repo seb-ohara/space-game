@@ -1,6 +1,6 @@
 extends Control
 
-const MIN_ZOOM := 0.25
+const MIN_ZOOM := 0.05
 const MAX_ZOOM := 1.8
 
 signal closed
@@ -10,12 +10,14 @@ signal graphics_quality_changed(value: int)
 signal frame_cap_changed(value: int)
 signal vsync_changed(enabled: bool)
 signal control_mode_changed(value: int)
+signal engine_volume_changed(value: float)
 
 var initial_zoom := 1.0
 var initial_graphics_quality := 2
 var initial_frame_cap := 0
 var initial_vsync := false
 var initial_control_mode := 0
+var initial_engine_volume := 0.7
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -77,7 +79,7 @@ func _ready() -> void:
 	controls.item_selected.connect(func(index: int): control_mode_changed.emit(index))
 	controls_row.add_child(controls)
 	var controls_hint := Label.new()
-	controls_hint.text = "RTS: select your ship, then click to move or attack."
+	controls_hint.text = "RTS: WASD pans; Space recenters; click to command."
 	controls_hint.add_theme_font_size_override("font_size", 12)
 	controls_hint.add_theme_color_override("font_color", Color("90afc0"))
 	column.add_child(controls_hint)
@@ -103,6 +105,27 @@ func _ready() -> void:
 	slider.value_changed.connect(func(value: float):
 		zoom_value.text = "%d%%" % int(round(value * 100.0))
 		zoom_changed.emit(value)
+	)
+	var audio_row := HBoxContainer.new()
+	audio_row.add_theme_constant_override("separation", 12)
+	column.add_child(audio_row)
+	var audio_label := Label.new()
+	audio_label.text = "ENGINE VOLUME"
+	audio_row.add_child(audio_label)
+	var audio_slider := HSlider.new()
+	audio_slider.name = "EngineVolume"
+	audio_slider.max_value = 1.0
+	audio_slider.step = 0.01
+	audio_slider.value = initial_engine_volume
+	audio_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	audio_row.add_child(audio_slider)
+	var audio_value := Label.new()
+	audio_value.custom_minimum_size = Vector2(54, 0)
+	audio_value.text = "%d%%" % int(round(initial_engine_volume * 100.0))
+	audio_row.add_child(audio_value)
+	audio_slider.value_changed.connect(func(value: float):
+		audio_value.text = "%d%%" % int(round(value * 100.0))
+		engine_volume_changed.emit(value)
 	)
 	var graphics_row := HBoxContainer.new()
 	column.add_child(graphics_row)

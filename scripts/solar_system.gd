@@ -1,30 +1,40 @@
 extends Node2D
 
-const WORLD_SIZE := Vector2(60000.0, 42000.0)
-const SUN_POSITION := WORLD_SIZE * 0.5
-const SUN_RADIUS := 2300.0
-const PLANET_RADIUS := 1280.0
-const MOON_RADIUS := 265.0
-const PLANET_ORBIT := 14500.0
-const MOON_ORBIT := 2250.0
-const PLANET_PERIOD := 1200.0
-const MOON_PERIOD := 160.0
+const WORLD_SIZE := Vector2(1360000.0, 560000.0)
+const WORLD_BOUNDS := Rect2(Vector2.ZERO, WORLD_SIZE)
+const SUN_POSITION := Vector2(266000.0, 280000.0)
+const SUN_RADIUS := 20000.0
+const PLANET_ORBIT := 109000.0
 const PLANET_PHASE := -0.4
-const MOON_PHASE := 2.85
-const START_OFFSET := Vector2(-1630.0, 490.0)
-const SUN_COLOR := Color("ffc277")
-const PLANET_COLOR := Color("65d3d6")
-const MOON_COLOR := Color("b9c5e1")
+const START_OFFSET := Vector2(-6030.0, 1800.0)
 const ORBIT_COLOR := Color(0.52, 0.73, 0.85, 0.36)
 const BODY_SHADER := preload("res://scripts/celestial_body.gdshader")
+enum BodyKind { SUN, TERRESTRIAL, MOON, BLUE_DWARF, GAS_GIANT, ICE_PLANET }
 
-var planet_position := Vector2.ZERO
-var moon_position := Vector2.ZERO
-var planet_path: Line2D
-var moon_path: Line2D
-var sun: ColorRect
-var planet: ColorRect
-var moon: ColorRect
+const SYSTEMS := [
+	{"name": "Sol", "center": SUN_POSITION, "radius": SUN_RADIUS, "extent": 2.65,
+		"kind": BodyKind.SUN, "color": Color("ffd292"), "chart_radius": 234000.0},
+	{"name": "Azure", "center": Vector2(1126000.0, 258000.0), "radius": 9000.0, "extent": 2.9,
+		"kind": BodyKind.BLUE_DWARF, "color": Color("a2ddff"), "chart_radius": 95000.0},
+]
+const ORBITERS := [
+	{"star": 0, "orbit": PLANET_ORBIT, "phase": PLANET_PHASE, "period": 2400.0, "segments": 1536,
+		"radius": 5500.0, "extent": 1.06, "kind": BodyKind.TERRESTRIAL, "color": Color("65d3d6")},
+	{"star": 0, "parent": 0, "orbit": 10800.0, "phase": 2.85, "period": 320.0, "segments": 384,
+		"radius": 1320.0, "extent": 1.015, "kind": BodyKind.MOON, "color": Color("b9c5e1")},
+	{"star": 0, "orbit": 207000.0, "phase": -1.22, "period": 6100.0, "segments": 2048,
+		"radius": 9600.0, "extent": 1.045, "kind": BodyKind.GAS_GIANT, "color": Color("eaaa76")},
+	{"star": 1, "orbit": 72000.0, "phase": 2.16, "period": 2650.0, "segments": 1024,
+		"radius": 5400.0, "extent": 1.055, "kind": BodyKind.ICE_PLANET, "color": Color("c7c7f1")},
+]
+
+class Orbiter:
+	var center := Vector2.ZERO
+	var visual: ColorRect
+	var track: Line2D
+
+var stars: Array[ColorRect] = []
+var orbiters: Array[Orbiter] = []
 var last_zoom := 0.0
 var planet_map_dots := PackedVector2Array()
 var moon_map_dots := PackedVector2Array()
@@ -34,9 +44,6 @@ static func starting_position() -> Vector2:
 
 func _ready() -> void:
 	var dot_texture := _make_dot_texture()
-	planet_path = _make_orbit(PLANET_ORBIT, 1024, dot_texture)
-	planet_path.position = SUN_POSITION
-	moon_path = _make_orbit(MOON_ORBIT, 256, dot_texture)
 	planet_map_dots = _make_map_dots(48)
 	moon_map_dots = _make_map_dots(12)
 	var noise := FastNoiseLite.new()
@@ -46,50 +53,94 @@ func _ready() -> void:
 	var surface := NoiseTexture2D.new()
 	surface.noise = noise
 	surface.seamless = true
-	sun = _make_body(SUN_RADIUS, 2.3, 0, surface)
-	sun.position = SUN_POSITION - sun.size * 0.5
-	planet = _make_body(PLANET_RADIUS, 1.06, 1, surface)
-	moon = _make_body(MOON_RADIUS, 1.015, 2, surface)
+	for system: Dictionary in SYSTEMS:
+		var star := _make_body(system, surface)
+		star.position = system.center - star.size * 0.5
+		stars.append(star)
+	for definition: Dictionary in ORBITERS:
+		var orbiter := Orbiter.new()
+		orbiter.track = _make_orbit(definition.orbit, definition.segments, dot_texture)
+		orbiter.visual = _make_body(definition, surface)
+		move_child(orbiter.track, stars.size() + orbiters.size())
+		orbiters.append(orbiter)
 	_update_positions(0.0)
 
 func update_view(clock: float, camera: Transform2D, visible_world: Rect2) -> void:
 	transform = camera
 	_update_positions(clock)
 	var zoom := camera.x.length()
-	if zoom != last_zoom:
-		last_zoom = zoom
-		_size_orbit_dots(planet_path, PLANET_ORBIT, zoom)
-		_size_orbit_dots(moon_path, MOON_ORBIT, zoom)
-	planet_path.visible = _orbit_intersects_view(SUN_POSITION, PLANET_ORBIT, planet_path.width, visible_world)
-	moon_path.visible = _orbit_intersects_view(planet_position, MOON_ORBIT, moon_path.width, visible_world)
-	sun.visible = visible_world.intersects(Rect2(sun.position, sun.size))
-	planet.visible = visible_world.intersects(Rect2(planet.position, planet.size))
-	moon.visible = visible_world.intersects(Rect2(moon.position, moon.size))
-	if planet.visible:
-		_light_body(planet, planet_position)
-	if moon.visible:
-		_light_body(moon, moon_position)
+	for index in stars.size():
+		var center: Vector2 = SYSTEMS[index].center
+		var nearest := center.clamp(visible_world.position, visible_world.end)
+		stars[index].visible = center.distance_squared_to(nearest) < pow(stars[index].size.x * 0.5, 2)
+	for index in orbiters.size():
+		var orbiter := orbiters[index]
+		var definition: Dictionary = ORBITERS[index]
+		if zoom != last_zoom:
+			_size_orbit_dots(orbiter.track, definition.orbit, zoom)
+		orbiter.track.visible = _orbit_intersects_view(orbiter.track.position, definition.orbit, orbiter.track.width, visible_world)
+		orbiter.visual.visible = visible_world.intersects(Rect2(orbiter.visual.position, orbiter.visual.size))
+		if orbiter.visual.visible:
+			var star_center: Vector2 = SYSTEMS[definition.star].center
+			(orbiter.visual.material as ShaderMaterial).set_shader_parameter("sunward", orbiter.center.direction_to(star_center))
+	last_zoom = zoom
 
-func draw_minimap(canvas: CanvasItem, map_rect: Rect2) -> void:
-	var map_scale := map_rect.size / WORLD_SIZE
-	var sun_marker := map_rect.position + SUN_POSITION * map_scale
-	var planet_marker := map_rect.position + planet_position * map_scale
-	var moon_marker := map_rect.position + moon_position * map_scale
-	canvas.draw_set_transform(sun_marker, 0.0, map_scale * PLANET_ORBIT)
-	canvas.draw_multiline(planet_map_dots, ORBIT_COLOR)
-	canvas.draw_set_transform(planet_marker, 0.0, map_scale * MOON_ORBIT)
-	canvas.draw_multiline(moon_map_dots, ORBIT_COLOR)
+func nearest_system(point: Vector2) -> int:
+	var closest := 0
+	var best_distance := INF
+	for index in SYSTEMS.size():
+		var distance := point.distance_squared_to(SYSTEMS[index].center)
+		if distance < best_distance:
+			closest = index
+			best_distance = distance
+	return closest
+
+func local_chart_at(point: Vector2, system_index: int) -> Rect2:
+	var system: Dictionary = SYSTEMS[system_index]
+	var half := Vector2.ONE * float(system.chart_radius)
+	var chart := Rect2(system.center - half, half * 2.0)
+	return chart if chart.has_point(point) else WORLD_BOUNDS
+
+func light_direction_at(point: Vector2) -> Vector2:
+	var direction := Vector2.ZERO
+	var total_weight := 0.0
+	for system: Dictionary in SYSTEMS:
+		var offset: Vector2 = system.center - point
+		var distance := maxf(offset.length(), system.radius)
+		var weight := pow(float(system.radius) / distance, 2)
+		direction += offset / distance * weight
+		total_weight += weight
+	return direction / total_weight
+
+func draw_minimap(canvas: CanvasItem, chart: Transform2D, system_index: int) -> void:
+	var map_scale := chart.x.x
+	for index in orbiters.size():
+		var definition: Dictionary = ORBITERS[index]
+		if system_index >= 0 and definition.star != system_index:
+			continue
+		var track_radius := float(definition.orbit) * map_scale
+		if track_radius < 2.0:
+			continue
+		canvas.draw_set_transform(chart * orbiters[index].track.position, 0.0, Vector2.ONE * track_radius)
+		canvas.draw_multiline(moon_map_dots if definition.has("parent") else planet_map_dots, ORBIT_COLOR)
 	canvas.draw_set_transform(Vector2.ZERO)
-	canvas.draw_circle(sun_marker, 4.0, SUN_COLOR)
-	canvas.draw_circle(planet_marker, 2.8, PLANET_COLOR)
-	canvas.draw_circle(moon_marker, 1.65, MOON_COLOR)
+	for index in SYSTEMS.size():
+		if system_index < 0 or index == system_index:
+			var system: Dictionary = SYSTEMS[index]
+			canvas.draw_circle(chart * system.center, maxf(2.5, system.radius * map_scale), system.color)
+	for index in orbiters.size():
+		var definition: Dictionary = ORBITERS[index]
+		if system_index < 0 or definition.star == system_index:
+			canvas.draw_circle(chart * orbiters[index].center, maxf(1.15, definition.radius * map_scale), definition.color)
 
 func _update_positions(clock: float) -> void:
-	planet_position = SUN_POSITION + _orbit_offset(clock, PLANET_PHASE, PLANET_PERIOD, PLANET_ORBIT)
-	moon_position = planet_position + _orbit_offset(clock, MOON_PHASE, MOON_PERIOD, MOON_ORBIT)
-	moon_path.position = planet_position
-	planet.position = planet_position - planet.size * 0.5
-	moon.position = moon_position - moon.size * 0.5
+	for index in orbiters.size():
+		var orbiter := orbiters[index]
+		var definition: Dictionary = ORBITERS[index]
+		var parent_center: Vector2 = orbiters[definition.parent].center if definition.has("parent") else SYSTEMS[definition.star].center
+		orbiter.center = parent_center + _orbit_offset(clock, definition.phase, definition.period, definition.orbit)
+		orbiter.track.position = parent_center
+		orbiter.visual.position = orbiter.center - orbiter.visual.size * 0.5
 
 func _orbit_offset(clock: float, phase: float, period: float, radius: float) -> Vector2:
 	return Vector2.from_angle(phase + TAU * fposmod(clock, period) / period) * radius
@@ -136,18 +187,15 @@ func _make_map_dots(count: int) -> PackedVector2Array:
 		points.append(Vector2.from_angle(angle + TAU / count * 0.16))
 	return points
 
-func _make_body(radius: float, extent: float, kind: int, surface: Texture2D) -> ColorRect:
+func _make_body(definition: Dictionary, surface: Texture2D) -> ColorRect:
 	var body := ColorRect.new()
-	body.size = Vector2.ONE * radius * extent * 2.0
+	body.size = Vector2.ONE * float(definition.radius) * float(definition.extent) * 2.0
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var appearance := ShaderMaterial.new()
 	appearance.shader = BODY_SHADER
 	appearance.set_shader_parameter("surface_noise", surface)
-	appearance.set_shader_parameter("body_kind", kind)
-	appearance.set_shader_parameter("disc_extent", extent)
+	appearance.set_shader_parameter("body_kind", definition.kind)
+	appearance.set_shader_parameter("disc_extent", definition.extent)
 	body.material = appearance
 	add_child(body)
 	return body
-
-func _light_body(body: ColorRect, center: Vector2) -> void:
-	(body.material as ShaderMaterial).set_shader_parameter("sunward", center.direction_to(SUN_POSITION))

@@ -12,6 +12,10 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	var center := bounds.get_center()
 	# Include side-mounted details and some empty space for samples along the sun ray.
 	var area := Rect2(bounds.position - center, bounds.size).grow(MODULES.CELL * 1.25)
+	for part in parts:
+		if MODULES.is_decoration(part) and part.type == "retro_antenna":
+			var location := Vector2(part.x, part.y) * MODULES.CELL - center
+			area = area.merge(Rect2(location - Vector2.ONE * MODULES.CELL * 0.5, Vector2.ONE * MODULES.CELL))
 	var size := Vector2i((area.size / TEXEL_SIZE).ceil())
 	var heights := PackedByteArray()
 	heights.resize(size.x * size.y)
@@ -19,16 +23,36 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	for part in parts:
 		var offset := Vector2(part.x, part.y) * MODULES.CELL - center
 		var kind: String = part.type
-		if MODULES.is_decoration(part) or kind == "cockpit":
+		if MODULES.is_decoration(part):
 			if not masks.has(kind):
-				var texture: Texture2D = MODULES.SYSTEM_TEXTURES.cockpit if kind == "cockpit" else MODULES.DECORATION_TEXTURES[kind]
+				var texture: Texture2D = MODULES.DECORATION_TEXTURES[kind]
 				masks[kind] = texture.get_image()
 			var span := Vector2(MODULES.footprint(part).size) * MODULES.CELL
 			var texture_center := offset + (span - Vector2.ONE * MODULES.CELL) * 0.5
+			if kind == "retro_antenna":
+				var antenna_size := MODULES.DECORATION_TEXTURES.retro_antenna.get_size()
+				span = Vector2(antenna_size.x / antenna_size.y, 1.0) * MODULES.CELL
+			if kind == "retro_bridge":
+				var texture_size := MODULES.DECORATION_TEXTURES.retro_bridge.get_size()
+				span = Vector2(1.4, 1.4 * texture_size.y / texture_size.x) * MODULES.CELL
 			var pose := Transform2D(int(part.rotation) * PI / 2.0, Vector2(-1.0 if part.get("flip_x", false) else 1.0, 1.0), 0.0, Vector2.ZERO)
 			var normalized_part := Transform2D(Vector2.RIGHT / span, Vector2.DOWN / span, -texture_center / span)
 			var sample_uv := Transform2D(0.0, Vector2.ONE * 0.5) * pose.affine_inverse() * normalized_part
-			for polygon in MODULES.material_polygons(part, offset):
+			var polygons := MODULES.material_polygons(part, offset)
+			if kind == "retro_antenna":
+				var half := span * 0.5
+				var antenna_polygon := PackedVector2Array()
+				for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]:
+					antenna_polygon.append(texture_center + pose * (corner * half))
+				polygons = [antenna_polygon]
+				var inverse_pose := pose.affine_inverse()
+				var translate := Transform2D(0.0, -texture_center)
+				var normalize := Transform2D(Vector2.RIGHT / span, Vector2.DOWN / span, Vector2.ONE * 0.5)
+				sample_uv = normalize * inverse_pose * translate
+			if kind == "retro_bridge":
+				var half := span * 0.5
+				polygons = [PackedVector2Array([offset + Vector2(-half.x, -half.y), offset + Vector2(half.x, -half.y), offset + Vector2(half.x, half.y), offset + Vector2(-half.x, half.y)])]
+			for polygon in polygons:
 				if kind == "cockpit":
 					_stamp(heights, size, area.position, polygon, DECK_HEIGHT)
 				var height := COCKPIT_HEIGHT if kind in ["cockpit", "armour_panel", "radar_dish"] else DETAIL_HEIGHT
