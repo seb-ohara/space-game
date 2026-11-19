@@ -9,11 +9,13 @@ signal build_requested
 signal graphics_quality_changed(value: int)
 signal frame_cap_changed(value: int)
 signal vsync_changed(enabled: bool)
+signal control_mode_changed(value: int)
 
 var initial_zoom := 1.0
 var initial_graphics_quality := 2
 var initial_frame_cap := 0
 var initial_vsync := false
+var initial_control_mode := 0
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -60,6 +62,25 @@ func _ready() -> void:
 	build_button.focus_mode = Control.FOCUS_NONE
 	build_button.pressed.connect(func(): build_requested.emit())
 	column.add_child(build_button)
+	var controls_row := HBoxContainer.new()
+	column.add_child(controls_row)
+	var controls_label := Label.new()
+	controls_label.text = "CONTROL MODE"
+	controls_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	controls_row.add_child(controls_label)
+	var controls := OptionButton.new()
+	controls.name = "ControlMode"
+	controls.custom_minimum_size = Vector2(180, 0)
+	controls.add_item("WASD flight")
+	controls.add_item("RTS commands")
+	controls.select(clampi(initial_control_mode, 0, 1))
+	controls.item_selected.connect(func(index: int): control_mode_changed.emit(index))
+	controls_row.add_child(controls)
+	var controls_hint := Label.new()
+	controls_hint.text = "RTS: select your ship, then click to move or attack."
+	controls_hint.add_theme_font_size_override("font_size", 12)
+	controls_hint.add_theme_color_override("font_color", Color("90afc0"))
+	column.add_child(controls_hint)
 	var zoom_title := Label.new()
 	zoom_title.text = "CAMERA ZOOM"
 	zoom_title.add_theme_font_size_override("font_size", 13)

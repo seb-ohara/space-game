@@ -1,5 +1,4 @@
 shader_type canvas_item;
-render_mode unshaded;
 
 uniform sampler2D relief_map : filter_linear, repeat_disable;
 uniform vec2 relief_origin;
