@@ -1,24 +1,13 @@
 extends RefCounted
 
-const LIGHT_CRUISER := "preset_light_cruiser"
 const HD_LIGHT_CRUISER := "preset_light_cruiser_hd"
 const CRUISER_MACHINE_LASER := "cruiser_machine_laser"
 const HD_CRUISER_HULL := preload("res://ship-sprites/starters/light-cruiser-hd-hull.png")
 # Mount positions use source image pixels. Each atlas row holds that mount's
 # barrels and housing, with its rotation pivot shared by all three layers.
 const CRUISER_TURRET_LAYOUTS := {
-	LIGHT_CRUISER: {
-		"mounts": [Vector2(15, 34), Vector2(47, 34), Vector2(11, 69), Vector2(51, 69), Vector2(31, 94)],
-		"atlas": preload("res://ship-sprites/starters/light-cruiser-turrets.png"),
-		"stride": 17.0,
-		"pivot": Vector2(6, 11),
-		"barrels": [Rect2(3, 1, 2, 6), Rect2(7, 1, 2, 6)],
-		"housing": Rect2(1, 7, 10, 9),
-		"muzzles": [Vector2(-2, -10), Vector2(2, -10)],
-		"filter": CanvasItem.TEXTURE_FILTER_NEAREST,
-	},
 	HD_LIGHT_CRUISER: {
-		"mounts": [Vector2(86.5, 180), Vector2(243.5, 180), Vector2(67.5, 353), Vector2(262.5, 353), Vector2(164.5, 492)],
+		"mounts": [Vector2(89.5, 185), Vector2(246.5, 185), Vector2(70.5, 358), Vector2(265.5, 358), Vector2(167.5, 497)],
 		"atlas": preload("res://ship-sprites/starters/light-cruiser-hd-turrets.png"),
 		"stride": 96.0,
 		"pivot": Vector2(38.5, 65),
@@ -30,41 +19,28 @@ const CRUISER_TURRET_LAYOUTS := {
 }
 
 const PRESET_TEXTURES := {
-	"preset_frigate": preload("res://ship-sprites/heritage/frigate.png"),
 	"preset_scout": preload("res://ship-sprites/heritage/scout.png"),
-	"preset_pixel_starter": preload("res://ship-sprites/starters/pixel-starter.png"),
-	"preset_starter_2": preload("res://ship-sprites/starters/starter-2.png"),
-	"preset_light_gunship": preload("res://ship-sprites/starters/light-gunship.png"),
-	"preset_light_destroyer": preload("res://ship-sprites/starters/light-destroyer.png"),
-	LIGHT_CRUISER: preload("res://ship-sprites/starters/light-cruiser.png"),
 	HD_LIGHT_CRUISER: preload("res://ship-sprites/starters/light-cruiser-hd.png"),
-	"pixel_custom": preload("res://ship-sprites/starters/pixel-starter.png"),
+	"pixel_custom": preload("res://ship-sprites/starters/armoured-starter.png"),
 	"preset_armoured_starter": preload("res://ship-sprites/starters/armoured-starter.png"),
 }
 const PRESET_NAMES := {
-	"Built-in · Heritage Frigate": "preset_frigate",
 	"Built-in · Heritage Scout": "preset_scout",
-	"Built-in · Pixel Starter": "preset_pixel_starter",
-	"Built-in · Starter 2": "preset_starter_2",
-	"Built-in · Light Gunship": "preset_light_gunship",
-	"Built-in · Light Destroyer": "preset_light_destroyer",
-	"Built-in · Light Cruiser": LIGHT_CRUISER,
 	"Built-in · HD Light Cruiser": HD_LIGHT_CRUISER,
 	"Built-in · Armoured Starter": "preset_armoured_starter",
 }
-const PIXEL_PRESETS := ["preset_pixel_starter", "preset_starter_2", "preset_light_gunship", "preset_light_destroyer", LIGHT_CRUISER]
 const SHIP_PIXELS_PER_CELL := 8.0
+const WORLD_UNITS_PER_METER := 11.25
+const PRESET_LENGTHS_METERS := {
+	"preset_scout": 25.0,
+	"preset_armoured_starter": 13.0,
+	HD_LIGHT_CRUISER: 70.0,
+}
 
 static func preset_design(kind: String) -> Array:
-	if kind == "preset_frigate":
-		return [{"type":kind, "x":-8, "y":-15, "rotation":0}]
-	if kind == "preset_scout":
-		return [{"type":kind, "x":-4, "y":-7, "rotation":0}]
-	if kind in PIXEL_PRESETS or kind == HD_LIGHT_CRUISER:
+	if kind in [HD_LIGHT_CRUISER, "preset_scout", "preset_armoured_starter"]:
 		var half_size := Vector2(_default_size({"type": kind})) * 0.5
 		return [{"type":kind, "x":-floori(half_size.x), "y":-floori(half_size.y), "rotation":0}]
-	if kind == "preset_armoured_starter":
-		return [{"type":kind, "x":-2, "y":-4, "rotation":0}]
 	return []
 
 const CARGO_TEXTURES := {
@@ -143,14 +119,8 @@ const ORDER := [
 	"reactor", "shield", "retro_cargo", "retro_bridge", "retro_antenna",
 ]
 const TYPES := {
-	"preset_frigate": {"name":"Heritage Frigate", "category":"PRESET SHIPS", "mass":300.0, "health":600.0, "power":30.0, "thrust":480.0, "weapon":16.0},
 	"preset_scout": {"name":"Heritage Scout", "category":"PRESET SHIPS", "mass":90.0, "health":220.0, "power":20.0, "thrust":180.0},
-	"preset_pixel_starter": {"name":"Pixel Starter", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
-	"preset_light_gunship": {"name":"Light Gunship", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
-	"preset_light_destroyer": {"name":"Light Destroyer", "category":"PRESET SHIPS", "mass":110.0, "health":240.0, "power":25.0, "thrust":220.0},
-	LIGHT_CRUISER: {"name":"Light Cruiser", "category":"PRESET SHIPS", "mass":110.0, "health":240.0, "power":25.0, "thrust":220.0, "weapon":20.0},
 	HD_LIGHT_CRUISER: {"name":"HD Light Cruiser", "category":"PRESET SHIPS", "mass":110.0, "health":240.0, "power":25.0, "thrust":220.0, "weapon":20.0},
-	"preset_starter_2": {"name":"Starter 2", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
 	"pixel_custom": {"name":"Pixel ship", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
 	"preset_armoured_starter": {"name":"Armoured Starter", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
 	"retro_turret_base": {"name":"Heritage turret mount", "category":"HULL & STRUCTURE", "mass":4.0, "health":20.0},
@@ -185,20 +155,7 @@ const TYPES := {
 }
 
 static func default_design() -> Array:
-	return migrate_legacy([
-		{"type":"retro_nose", "x":0, "y":0, "rotation":0},
-		{"type":"retro_spine", "x":0, "y":1, "rotation":0},
-		{"type":"retro_spine", "x":1, "y":1, "rotation":0},
-		{"type":"retro_spine", "x":-1, "y":1, "rotation":0},
-		{"type":"retro_bridge", "layer":"decoration", "x":0, "y":1, "rotation":0, "width":1},
-		{"type":"reactor", "x":-1, "y":2, "rotation":0},
-		{"type":"retro_engine", "x":0, "y":2, "rotation":0},
-		{"type":"turret_base", "turret":"laser", "x":1, "y":0, "rotation":0},
-		{"type":"shield", "x":1, "y":2, "rotation":0},
-		{"type":"turret_base", "turret":"miner", "x":-1, "y":0, "rotation":0},
-		{"type":"retro_spine", "x":-1, "y":2, "rotation":0},
-		{"type":"retro_cargo", "x":-2, "y":2, "rotation":0},
-	])
+	return preset_design("preset_armoured_starter")
 
 const TURRETS := ["laser", "machine_gun", "retro_machine_gun", "long_machine_gun", "missile", "railgun", "miner"]
 const INTERIOR_ONLY_TYPES := ["reactor", "shield", "command_deck"]
@@ -269,17 +226,13 @@ static func can_stretch(kind: String) -> bool:
 	return kind == "engine" or HULL_TEXTURES.has(kind) or is_armour(kind) or CARGO_TEXTURES.has(kind) or (DECORATION_TEXTURES.has(kind) and kind not in ["armour_panel", "retro_bridge", "retro_antenna"])
 
 static func _default_size(part: Dictionary) -> Vector2i:
-	if part.type == "preset_frigate":
-		return Vector2i(17, 31)
-	if part.type == "preset_scout":
-		return Vector2i(8, 14)
-	if part.type == HD_LIGHT_CRUISER:
-		return Vector2i(9, 22)
-	if part.type in PIXEL_PRESETS or part.type == "pixel_custom":
+	if PRESET_LENGTHS_METERS.has(part.type):
+		var texture_size := preset_texture(part).get_size()
+		var world_size: Vector2 = texture_size * (float(PRESET_LENGTHS_METERS[part.type]) * WORLD_UNITS_PER_METER / texture_size.y)
+		return Vector2i((world_size / CELL).ceil())
+	if part.type == "pixel_custom":
 		var image_size := preset_texture(part).get_size()
 		return Vector2i((image_size / SHIP_PIXELS_PER_CELL).ceil())
-	if part.type == "preset_armoured_starter":
-		return Vector2i(4, 8)
 	if part.type == "armour_panel":
 		return ARMOUR_PANEL_SIZE if int(part.get("rotation", 0)) % 2 == 0 else Vector2i(ARMOUR_PANEL_SIZE.y, ARMOUR_PANEL_SIZE.x)
 	if part.type == "command_deck":
@@ -294,7 +247,9 @@ static func preset_draw_rect(part: Dictionary, center: Vector2, scale_factor: fl
 	var span := Vector2(footprint(part).size) * CELL * scale_factor
 	var texture_size: Vector2 = preset_texture(part).get_size()
 	# Pixel ship artwork shares a fixed world scale.
-	var fit := CELL * scale_factor / SHIP_PIXELS_PER_CELL if part.type in PIXEL_PRESETS or part.type == "pixel_custom" else minf(span.x / texture_size.x, span.y / texture_size.y)
+	var fit := CELL * scale_factor / SHIP_PIXELS_PER_CELL if part.type == "pixel_custom" else minf(span.x / texture_size.x, span.y / texture_size.y)
+	if PRESET_LENGTHS_METERS.has(part.type):
+		fit = PRESET_LENGTHS_METERS[part.type] * WORLD_UNITS_PER_METER * scale_factor / texture_size.y
 	var size := texture_size * fit
 	return Rect2(center - Vector2.ONE * CELL * scale_factor * 0.5 + (span - size) * 0.5, size)
 
@@ -305,7 +260,7 @@ static func preset_texture(part: Dictionary) -> Texture2D:
 	if not pixel_starter_textures.has(data):
 		var image := Image.new()
 		if image.load_png_from_buffer(Marshalls.base64_to_raw(data)) != OK or image.get_width() < 1 or image.get_height() < 1 or image.get_width() > 256 or image.get_height() > 256:
-			return PRESET_TEXTURES.preset_pixel_starter
+			return PRESET_TEXTURES.pixel_custom
 		var texture := CanvasTexture.new()
 		texture.diffuse_texture = ImageTexture.create_from_image(image)
 		texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -664,6 +619,8 @@ static func bounds(parts: Array) -> Rect2:
 			continue
 		var area := footprint(part)
 		var solid := Rect2((Vector2(area.position) - Vector2.ONE * 0.5) * CELL, Vector2(area.size) * CELL)
+		if PRESET_TEXTURES.has(part.type):
+			solid = preset_draw_rect(part, Vector2(area.position) * CELL)
 		if part.has("cutouts") or part.type == "wedge_half":
 			var hull := material_polygons(part, Vector2(area.position) * CELL)
 			if hull.is_empty():
@@ -677,6 +634,9 @@ static func bounds(parts: Array) -> Rect2:
 	if not low.is_finite():
 		return Rect2(Vector2(-CELL / 2, -CELL / 2), Vector2.ONE * CELL)
 	return Rect2(low, high - low)
+
+static func dimensions_meters(parts: Array) -> Vector2:
+	return bounds(parts).size / WORLD_UNITS_PER_METER
 
 static func clearance_issues(parts: Array) -> Array[Dictionary]:
 	var cells := {}
@@ -827,14 +787,6 @@ static func validate(parts: Array, require_flight: bool = true, check_clearance:
 		return "Add an engine to fly."
 	return ""
 
-static func get_pixel_starter_texture(kind: String) -> CanvasTexture:
-	if not pixel_starter_textures.has(kind):
-		var texture := CanvasTexture.new()
-		texture.diffuse_texture = PRESET_TEXTURES[kind]
-		texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		pixel_starter_textures[kind] = texture
-	return pixel_starter_textures[kind]
-
 static func get_engine_texture() -> Texture2D:
 	if engine_texture == null:
 		var image := ENGINE_SOURCE.get_image().get_region(ENGINE_SOURCE_RECT)
@@ -954,30 +906,12 @@ static func preset_alpha_polygons(part: Dictionary, center: Vector2, scale_facto
 static func material_polygons(part: Dictionary, center: Vector2, cell_size: float = CELL) -> Array[PackedVector2Array]:
 	if part.type == HD_LIGHT_CRUISER:
 		return preset_alpha_polygons(part, center, cell_size / CELL)
-	if part.type in ["preset_light_destroyer", LIGHT_CRUISER]:
-		# Trace the starboard side in source pixels, then mirror it around the centerline.
-		var side := PackedVector2Array([
-			Vector2(31, 0), Vector2(35, 0), Vector2(50, 6), Vector2(57, 55),
-			Vector2(57, 61), Vector2(62, 66), Vector2(62, 74), Vector2(57, 78),
-			Vector2(54, 112), Vector2(61, 117), Vector2(62, 124), Vector2(59, 160),
-			Vector2(58, 165), Vector2(49, 165), Vector2(48, 168), Vector2(36, 168),
-			Vector2(33, 175), Vector2(31, 175),
-		])
-		var rect := preset_draw_rect(part, center, cell_size / CELL)
-		var pixel_size := cell_size / SHIP_PIXELS_PER_CELL
-		var outline := PackedVector2Array()
-		for point in side:
-			outline.append(rect.position + point * pixel_size)
-		for i in range(side.size() - 2, 0, -1):
-			outline.append(rect.position + Vector2(62 - side[i].x, side[i].y) * pixel_size)
-		return [outline]
 	if PRESET_TEXTURES.has(part.type):
-		var span := Vector2(footprint(part).size) * cell_size
-		var top_left := center - Vector2.ONE * cell_size * 0.5
+		var rect := preset_draw_rect(part, center, cell_size / CELL)
+		var span := rect.size
+		var top_left := rect.position
 		var points := PackedVector2Array()
-		var outline: Array = [Vector2(0.31, 0), Vector2(0.69, 0), Vector2(0.81, 0.04), Vector2(0.81, 0.18), Vector2(0.68, 0.25), Vector2(0.81, 0.31), Vector2(0.81, 0.53), Vector2(1, 0.65), Vector2(1, 0.82), Vector2(0.75, 0.9), Vector2(0.73, 1), Vector2(0.27, 1), Vector2(0.25, 0.9), Vector2(0, 0.82), Vector2(0, 0.65), Vector2(0.19, 0.53), Vector2(0.19, 0.31), Vector2(0.32, 0.25), Vector2(0.19, 0.18), Vector2(0.19, 0.04)] if part.type == "preset_frigate" else [Vector2(0.5, 0), Vector2(0.6, 0.05), Vector2(1, 0.8), Vector2(0.9, 0.96), Vector2(0.75, 1), Vector2(0.25, 1), Vector2(0.1, 0.96), Vector2(0, 0.8), Vector2(0.4, 0.05)]
-		if part.type == "preset_light_gunship":
-			outline = [Vector2(0.17, 0.07), Vector2(0.39, 0.07), Vector2(0.39, 0.20), Vector2(0.55, 0.20), Vector2(0.55, 0.07), Vector2(0.75, 0.07), Vector2(0.78, 0.68), Vector2(0.94, 0.65), Vector2(0.94, 0.82), Vector2(0.72, 0.97), Vector2(0.16, 0.98), Vector2(0.07, 0.92), Vector2(0.12, 0.68)]
+		var outline: Array = [Vector2(0.5, 0), Vector2(0.6, 0.05), Vector2(1, 0.8), Vector2(0.9, 0.96), Vector2(0.75, 1), Vector2(0.25, 1), Vector2(0.1, 0.96), Vector2(0, 0.8), Vector2(0.4, 0.05)]
 		if part.type == "preset_armoured_starter":
 			outline = [Vector2(0.35, 0), Vector2(0.65, 0), Vector2(1, 0.74), Vector2(1, 0.87), Vector2(0.86, 1), Vector2(0.14, 1), Vector2(0, 0.87), Vector2(0, 0.74)]
 		for point: Vector2 in outline:
@@ -1249,13 +1183,6 @@ static func navigation_light_brightness(time: float) -> float:
 	var phase := fposmod(time, 2.4) / 2.4
 	return smoothstep(0.0, 0.20, phase) * (1.0 - smoothstep(0.42, 0.65, phase))
 
-static func draw_light_gunship_beacon(canvas: CanvasItem, part: Dictionary, center: Vector2, brightness: float, scale_factor: float = 1.0) -> void:
-	# The antenna lamp is one source pixel at (11, 0) in the cropped sprite.
-	var rect := preset_draw_rect(part, center, scale_factor)
-	var pixel_size := rect.size.x / preset_texture(part).get_size().x
-	var color := Color(0.20, 0.055, 0.025).lerp(Color(212.0 / 255.0, 63.0 / 255.0, 9.0 / 255.0), brightness)
-	canvas.draw_rect(Rect2(rect.position + Vector2(11, 0) * pixel_size, Vector2.ONE * pixel_size), color)
-
 static func draw_mounted_turret(canvas: CanvasItem, turret: String, center: Vector2, scale_factor: float = 1.0, alpha: float = 1.0, tint: Color = Color.WHITE, turret_angle: float = 0.0, recoil: float = 0.0) -> void:
 	var sprite_color := Color(tint.r, tint.g, tint.b, alpha * tint.a)
 	var pixel_scale := CELL * scale_factor / 32.0
@@ -1322,8 +1249,7 @@ static func _structural_outline(part: Dictionary, center: Vector2, half: float) 
 static func draw_part(canvas: CanvasItem, part: Dictionary, center: Vector2, scale_factor: float = 1.0, alpha: float = 1.0, tint: Color = Color.WHITE, navigation_light_level: float = 1.0, separate_turrets: bool = false) -> void:
 	var kind: String = part.type
 	if PRESET_TEXTURES.has(kind):
-		var texture_kind := "preset_light_destroyer" if separate_turrets and kind == LIGHT_CRUISER else kind
-		var texture: Texture2D = get_pixel_starter_texture(texture_kind) if kind in PIXEL_PRESETS else preset_texture(part)
+		var texture: Texture2D = preset_texture(part)
 		if separate_turrets and kind == HD_LIGHT_CRUISER:
 			texture = HD_CRUISER_HULL
 		canvas.draw_texture_rect(texture, preset_draw_rect(part, center, scale_factor), false, Color(tint.r, tint.g, tint.b, alpha * tint.a))

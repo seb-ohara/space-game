@@ -209,10 +209,10 @@ func _select_design(index: int) -> void:
 	var design := designs[index]
 	var parts: Array = design.parts
 	var category: String = design.category
-	var size := MODULES.bounds(parts).size
+	var dimensions := MODULES.dimensions_meters(parts)
 	var stats := MODULES.stats(parts)
 	ship_title.text = design.name
-	ship_details.text = "%s  •  %d hull  •  %d × %d flight units" % [category, int(stats.health), roundi(size.x), roundi(size.y)]
+	ship_details.text = "%s  •  %d hull\nLength: %.1f m  •  Width: %.1f m" % [category, int(stats.health), dimensions.y, dimensions.x]
 	for part in parts:
 		if MODULES.CRUISER_TURRET_LAYOUTS.has(part.type):
 			ship_details.text += "\n%d twin-barrel machine lasers  •  Weapon slot 3" % MODULES.CRUISER_TURRET_LAYOUTS[part.type].mounts.size()
@@ -261,7 +261,7 @@ func _open_editor(design: Dictionary) -> void:
 	if not design.is_empty():
 		var part: Dictionary = design.parts[0]
 		editor.source = MODULES.preset_texture(part).get_image()
-		if part.type not in MODULES.PIXEL_PRESETS and part.type != "pixel_custom":
+		if part.type != "pixel_custom":
 			var world_size := MODULES.preset_draw_rect(part, Vector2.ZERO).size
 			var pixel_size := MODULES.CELL / MODULES.SHIP_PIXELS_PER_CELL
 			var target := (world_size / pixel_size).round().clamp(Vector2.ONE, Vector2(PIXEL_EDITOR.CANVAS_SIZE))
