@@ -16,12 +16,11 @@ func _ready() -> void:
 	overdrive_loop = _make_player("OverdriveLoop", OVERDRIVE_STREAM)
 	ignition = _make_player("BoostIgnition", IGNITION_STREAM)
 
-func update_mix(throttle: float, boost: float, hyper_jump: bool, delta: float) -> void:
-	var overdrive := 1.0 if hyper_jump else boost
+func update_mix(throttle: float, overdrive: float, sustained_boost: bool, delta: float) -> void:
 	var thrust_gain := volume * 0.48 * pow(throttle, 1.25) * lerpf(1.0, 0.72, overdrive)
 	var overdrive_gain := volume * 0.43 * pow(overdrive, 0.8)
 	_mix_loop(thrust_loop, thrust_gain, lerpf(0.90, 1.0, throttle) - 0.04 * overdrive, delta)
-	_mix_loop(overdrive_loop, overdrive_gain, 0.94 if hyper_jump else lerpf(0.91, 1.0, boost), delta)
+	_mix_loop(overdrive_loop, overdrive_gain, 0.94 if sustained_boost else lerpf(0.91, 1.0, overdrive), delta)
 
 func play_boost(charge: float) -> void:
 	if volume <= 0.0:

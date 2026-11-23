@@ -18,26 +18,29 @@ class ExhaustParticle:
 
 # Movement values are deliberately collected here for quick feel adjustments.
 @export_group("Flight feel")
-@export var top_speed := 850.0
-@export var acceleration := 2150.0
-@export var drag := 2.8
+@export var top_speed := 390.0
+@export var acceleration := 380.0
+@export var drag := 0.32
 @export var turn_speed := MODULES.BASE_TURN_SPEED
 
 const SOLAR_SYSTEM := preload("res://scripts/solar_system.gd")
 const WORLD_SIZE := SOLAR_SYSTEM.WORLD_SIZE
 const MODULES := preload("res://scripts/ship_modules.gd")
-const SHIP_BUILDER := preload("res://scripts/ship_builder.gd")
+const HANGAR := preload("res://scripts/hangar.gd")
+const SHIP_LIBRARY := preload("res://scripts/ship_design_library.gd")
 const SETTINGS_MENU := preload("res://scripts/settings_menu.gd")
 const ROCKET_ENGINE_AUDIO := preload("res://scripts/rocket_engine_audio.gd")
 const SHIP_SUNLIGHT := preload("res://scripts/ship_sunlight.gdshader")
 const SHIP_RELIEF := preload("res://scripts/ship_relief.gd")
+const FLEET_COLLISION_LAYER := 1
+const FLEET_COLLISION_MARGIN := 0.5
 const SHIELD_MARGIN := 26.0
 const SHIELD_IMPACT_DURATION := 0.36
 const ASTEROID_IMPACT_INDEX := -2
 const TARGET_RANGE := 1800.0
 const ENEMY_DETECTION_RANGE := 1800.0
 const ENEMY_SPEED := 270.0
-const ENEMY_ACCELERATION := 750.0
+const ENEMY_ACCELERATION := 390.0
 const ENEMY_PART_SCALE := 0.75
 const ENEMY_MIN_COMBAT_RANGE := 320.0
 const ENEMY_PREFERRED_RANGE := 460.0
@@ -45,20 +48,38 @@ const ENEMY_FIRE_RANGE := 650.0
 const NEUTRAL_SHIP_COLOR := Color("9bbfd0")
 const HOSTILE_SHIP_COLOR := Color("ff7668")
 const BOOST_CHARGE_SECONDS := 2.5
-const HYPER_JUMP_SPEED_MULTIPLIER := 10.0
+const BOOST_TRAVEL_SPEED := 6141.25
+const BOOST_TRAVEL_ACCELERATION := 6200.0
+const HYPERJUMP_COLOR := Color("9ee9ff")
+const HYPERJUMP_TRAVEL_SPEED := 25500.0
+const HYPERJUMP_TRAVEL_ACCELERATION := 23500.0
 const EXHAUST_PARTICLE_MIN_ZOOM := 0.12
 const EXHAUST_PARTICLE_LIMIT := 1600
 const ENGINE_TRAIL_LIFETIME := 2.8
-const HYPER_TRAIL_LIFETIME := 6.0
+const BOOST_TRAIL_LIFETIME := 6.0
 const ENGINE_TRAIL_INTERVAL := 0.05
+const ENGINE_IGNITION_RATE := 9.0
+const ENGINE_FADE_RATE := 5.0
 const RADIAL_MENU_RADIUS := 72.0
 const EXHAUST_SPARK_HOT := Color("fff2c4")
 const EXHAUST_SPARK_COOL := Color("fa602f")
 const EXHAUST_PLUME_HOT := Color("ff873d")
 const EXHAUST_PLUME_COOL := Color("b14431")
 const RTS_CAMERA_SPEED := 700.0
-const RTS_MAX_TURN_RATE := 3.0
+const CAMERA_ZOOM_STEP := 1.28
+const MAP_LABEL_ZOOM := 0.004
+const STAR_PARALLAX_FULL_ZOOM := 0.12
+const RTS_DOCKING_DISTANCE := 24.0
+const RTS_APPROACH_RATE := 0.9
+const TRAVEL_APPROACH_RATE := 1.6
+const THROTTLE_RAMP := 2.2
 const MACHINE_GUN_FLASH_DURATION := 0.06
+const CRUISER_LASER_COLOR := Color("65ffc2")
+const CRUISER_LASER_SPEED := 1700.0
+const CRUISER_LASER_DAMAGE := 4.0
+const CRUISER_TURRET_TURN_SPEED := 3.2
+const CRUISER_BARREL_RECOIL_DURATION := 0.09
+const CRUISER_BARREL_RECOIL_DISTANCE := 7.2
 const RAILGUN_SPEED := 3400.0
 const RAILGUN_COOLDOWN := 1.45
 const ROCKET_COOLDOWN := 1.2
@@ -76,10 +97,22 @@ const ROCKET_BLAST_DURATION := 0.27
 const WEAPON_SLOTS := [
 	{"name": "LASER", "turrets": ["laser"], "color": Color("8af4ff")},
 	{"name": "MINING LASER", "turrets": ["miner"], "color": Color("91dce8")},
-	{"name": "MACHINE GUN", "turrets": ["machine_gun", "retro_machine_gun", "long_machine_gun"], "color": Color("ffd078")},
+	{"name": "MACHINE GUN", "turrets": ["machine_gun", "retro_machine_gun", "long_machine_gun", MODULES.CRUISER_MACHINE_LASER], "color": Color("ffd078")},
 	{"name": "ROCKET", "turrets": ["missile"], "color": Color("ffc095")},
 	{"name": "RAILGUN", "turrets": ["railgun"], "color": Color("d3bcff")},
 ]
+var fleet: Array[Dictionary] = []
+var active_fleet_index := 0
+var fleet_visuals: Node2D
+var fleet_dialog: AcceptDialog
+var fleet_list: ItemList
+var fleet_designs: OptionButton
+var fleet_status: Label
+var fleet_context_menu: PopupMenu
+var fleet_context_index := -1
+var fleet_click_index := -1
+var fleet_click_start := Vector2.ZERO
+var fleet_design_entries: Array[Dictionary] = []
 var enemies: Array[Dictionary] = []
 var projectiles: Array[Dictionary] = []
 var rocket_smoke: Array[Dictionary] = []
@@ -105,10 +138,18 @@ var rts_drag_end := Vector2.ZERO
 var rts_move_active := false
 var rts_destination := Vector2.ZERO
 var rts_attack_active := false
-var hyper_jump_enabled := false
-var hyper_jump_direction := Vector2.ZERO
-var hyper_jump_decelerating := false
-var hyper_jump_button: Button
+var sustained_boost_enabled := false
+var sustained_boost_direction := Vector2.ZERO
+var boost_destination_active := false
+var boost_destination := Vector2.ZERO
+var boost_decelerating := false
+var boost_button: Button
+var hyperjump_context_button: Button
+var hyperjump_context_destination := -1
+var hyperjump_arrival_until := 0.0
+var hyperjump_time := -1.0
+var hyperjump_destination := -1
+var hyperjump_arrival := Vector2.ZERO
 var radial_menu_open := false
 var radial_menu_position := Vector2.ZERO
 var debris: Array[Dictionary] = []
@@ -125,7 +166,7 @@ var invulnerability := 0.0
 var enemy_wave_timer := -1.0
 var wave_number := 0
 var settings_layer: CanvasLayer = null
-var builder_layer: CanvasLayer = null
+var hangar_layer: CanvasLayer = null
 var world_background: Node2D
 var solar_system: SOLAR_SYSTEM
 var asteroid_visuals: Node2D
@@ -136,26 +177,35 @@ var exhaust_particles_visual: Node2D
 var exhaust_particles: Array[ExhaustParticle] = []
 var exhaust_rng := RandomNumberGenerator.new()
 var player_visual: ShipVisual
+var player_fleet_body: CharacterBody2D
 var custom_parts: Array = MODULES.default_design()
 var ship_cache_ready := false
 var cached_ship_stats: Dictionary = {}
 var cached_ship_bounds := Rect2()
+var cached_turret_mounts: Array[Dictionary] = []
 var cached_engines: Array[Dictionary] = []
 var cached_hull_shapes: Array[PackedVector2Array] = []
 var cached_armour_borders: Dictionary = {}
 var has_flight_controls := false
 
 var ship_position := Vector2.ZERO
+var ship_motion_remainder := Vector2.ZERO
 var velocity := Vector2.ZERO
 var heading := -PI / 2.0
 var angular_velocity := 0.0
 var thrust := 0.0
+var engine_throttle_target := 0.0
+var engine_boost_target := 0.0
+var engine_flame := 0.0
+var engine_overdrive := 0.0
 var boost_charging := false
 var boost_charge := 0.0
 var boost_time := 0.0
 var boost_duration := 0.0
 var boost_power := 0.0
 var stars: Array[Dictionary] = []
+var starfield_camera_center := Vector2.ZERO
+var starfield_offset := Vector2.ZERO
 var rng := RandomNumberGenerator.new()
 var elapsed := 0.0
 var asteroids: Array[Dictionary] = []
@@ -165,23 +215,27 @@ var mining := false
 var iron := 0
 var mining_progress := 0.0
 var camera_zoom := 0.65
-var flight_zoom := camera_zoom
-var system_overview := false
-var overview_bounds := SOLAR_SYSTEM.WORLD_BOUNDS
-var overview_system := -1
-var rts_camera_position := Vector2.ZERO
-var rts_camera_detached := false
+var camera_zoom_target := camera_zoom
+var camera_zoom_focus := Vector2.ZERO
+var camera_position := Vector2.ZERO
+var camera_following := true
+var camera_dragging := false
 var graphics_quality := 2
 var frame_cap := 0
 var vsync_enabled := false
 var graphics_settings_path := "user://graphics_settings.cfg"
 var engine_light_texture: GradientTexture2D
 var engine_audio := ROCKET_ENGINE_AUDIO.new()
+@onready var heritage_gun_audio: AudioStreamPlayer = $HeritageGunAudio
 
 func _ready() -> void:
 	_load_graphics_settings()
 	engine_audio.name = "RocketEngineAudio"
 	add_child(engine_audio)
+	player_fleet_body = CharacterBody2D.new()
+	player_fleet_body.collision_layer = 0
+	player_fleet_body.collision_mask = FLEET_COLLISION_LAYER
+	add_child(player_fleet_body)
 	_load_custom_ship()
 	_create_flight_visuals()
 	player_hull = _player_max_hull()
@@ -189,10 +243,18 @@ func _ready() -> void:
 	_create_top_controls()
 	rng.randomize()
 	ship_position = SOLAR_SYSTEM.starting_position()
+	fleet.append({"name": "Ship 1", "parts": custom_parts.duplicate(true), "position": ship_position, "heading": heading, "hull": player_hull, "shield": player_shield, "shield_delay": player_shield_delay})
+	starfield_camera_center = _camera_center()
 	_spawn_enemy_wave()
-	for i in range(190):
-		stars.append({"position": Vector2(rng.randf(), rng.randf()), "depth": rng.randf_range(0.15, 1.0),
-			"phase": rng.randf_range(0.0, TAU), "twinkle_speed": rng.randf_range(0.4, 1.2)})
+	for star_index in range(190):
+		stars.append({
+			"position": Vector2(rng.randf(), rng.randf()),
+			"depth": rng.randf_range(0.15, 1.0),
+			"tint": Color("adcaff").lerp(Color("ffe2ba"), rng.randf()),
+			"phase": rng.randf_range(0.0, TAU),
+			"twinkle_speed": rng.randf_range(0.45, 1.4),
+			"twinkle_strength": rng.randf_range(0.04, 0.16),
+		})
 	get_viewport().size_changed.connect(_queue_flight_redraw)
 	_queue_flight_redraw()
 
@@ -219,6 +281,8 @@ func _create_flight_visuals() -> void:
 	var exhaust_material := CanvasItemMaterial.new()
 	exhaust_material.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
 	exhaust_particles_visual.material = exhaust_material
+	fleet_visuals = Node2D.new()
+	world_background.add_child(fleet_visuals)
 	enemy_visuals = Node2D.new()
 	world_background.add_child(enemy_visuals)
 	debris_visual = _add_draw_layer(world_background, _draw_debris)
@@ -230,12 +294,15 @@ func _add_draw_layer(parent: Node, draw_layer: Callable, layer: Node2D = Node2D.
 	layer.draw.connect(func(): draw_layer.call(layer))
 	return layer
 
-func _add_ship_visual(parent: Node, exhaust: Callable, hull: Callable, details: Callable, effects: Callable) -> ShipVisual:
-	var visual := ShipVisual.new()
+func _add_sunlit_ship_layer(parent: Node, hull: Callable, visual: Node2D) -> void:
 	_add_draw_layer(parent, hull, visual)
 	var sunlight := ShaderMaterial.new()
 	sunlight.shader = SHIP_SUNLIGHT
 	visual.material = sunlight
+
+func _add_ship_visual(parent: Node, exhaust: Callable, hull: Callable, details: Callable, effects: Callable) -> ShipVisual:
+	var visual := ShipVisual.new()
+	_add_sunlit_ship_layer(parent, hull, visual)
 	visual.exhaust = _add_draw_layer(visual, exhaust)
 	visual.exhaust.show_behind_parent = true
 	visual.details = _add_draw_layer(visual, details)
@@ -261,8 +328,6 @@ func _set_engine_lighting(visual: ShipVisual, strength: float) -> void:
 
 func _queue_flight_redraw() -> void:
 	var viewport_size := get_viewport_rect().size
-	if system_overview:
-		camera_zoom = _fit_chart(viewport_size, overview_bounds) * 0.92
 	var zoom := Vector2.ONE * camera_zoom
 	var camera := _world_transform()
 	var view := Rect2(-camera.origin / camera_zoom, viewport_size / camera_zoom)
@@ -293,19 +358,36 @@ func _queue_flight_redraw() -> void:
 			var pose := Transform2D(enemy.heading + PI / 2.0, zoom, 0.0, position_on_screen)
 			_redraw_ship_visual(visual, pose, enemy.position, glowing_ships.has(i))
 			_set_engine_lighting(visual, _enemy_engine_power(enemy))
+	for i in range(fleet.size()):
+		var parked: Dictionary = fleet[i]
+		var visual: Node2D = parked.get("visual")
+		if is_instance_valid(visual):
+			visual.visible = i != active_fleet_index and visible_world.grow(float(parked.get("radius", 0.0))).has_point(parked.position)
+			if visual.visible:
+				var pose := Transform2D(float(parked.heading) + PI / 2.0, zoom, 0.0, camera * parked.position)
+				_update_sunlit_ship_pose(visual, pose, parked.position)
+				if parked.has_beacon:
+					visual.queue_redraw()
 	_redraw_ship_visual(player_visual, Transform2D(heading + PI / 2.0, zoom, 0.0, camera * ship_position), ship_position, glowing_ships.has(-1))
-	_set_engine_lighting(player_visual, maxf(thrust, minf(_boost_exhaust_fraction() * 5.0, 1.0)) * (1.5 if _hyper_jump_active() else 1.0))
+	_set_engine_lighting(player_visual, engine_flame * (1.0 + 0.5 * engine_overdrive))
+	var camera_center := _camera_center()
+	var parallax := smoothstep(MAP_LABEL_ZOOM, STAR_PARALLAX_FULL_ZOOM, camera_zoom)
+	starfield_offset += (camera_center - starfield_camera_center) * parallax * 0.001
+	starfield_camera_center = camera_center
 	world_background.queue_redraw()
 	if not asteroids.is_empty():
 		asteroid_effects.queue_redraw()
 	debris_visual.queue_redraw()
 	queue_redraw()
 
-func _redraw_ship_visual(visual: ShipVisual, pose: Transform2D, world_position: Vector2, has_shield_glow: bool) -> void:
+func _update_sunlit_ship_pose(visual: Node2D, pose: Transform2D, world_position: Vector2) -> void:
 	visual.transform = pose
 	var sunlight := visual.material as ShaderMaterial
 	var sun_direction := solar_system.light_direction_at(world_position)
 	sunlight.set_shader_parameter("sun_direction", sun_direction.rotated(-pose.get_rotation()))
+
+func _redraw_ship_visual(visual: ShipVisual, pose: Transform2D, world_position: Vector2, has_shield_glow: bool) -> void:
+	_update_sunlit_ship_pose(visual, pose, world_position)
 	# Keep the hull commands until a glow changes their colors or is cleared.
 	if has_shield_glow or visual.has_shield_glow:
 		visual.queue_redraw()
@@ -316,29 +398,37 @@ func _redraw_ship_visual(visual: ShipVisual, pose: Transform2D, world_position: 
 
 func _world_transform() -> Transform2D:
 	var screen_center := get_viewport_rect().size * 0.5
-	var center := overview_bounds.get_center() if system_overview else ship_position
-	if control_mode == 1 and rts_camera_detached and not system_overview:
-		center = rts_camera_position
-	return Transform2D(0.0, Vector2.ONE * camera_zoom, 0.0, screen_center - center * camera_zoom)
+	return Transform2D(0.0, Vector2.ONE * camera_zoom, 0.0, screen_center - _camera_center() * camera_zoom)
+
+func _camera_center() -> Vector2:
+	return ship_position if camera_following else camera_position
 
 func _fit_chart(size: Vector2, bounds: Rect2) -> float:
 	return minf(size.x / bounds.size.x, size.y / bounds.size.y)
 
-func _toggle_overview(whole_sector: bool) -> void:
-	var system_index := solar_system.nearest_system(ship_position)
-	var bounds := SOLAR_SYSTEM.WORLD_BOUNDS if whole_sector else solar_system.local_chart_at(ship_position, system_index)
-	if system_overview and bounds == overview_bounds:
-		_close_overview()
-		return
-	if not system_overview:
-		flight_zoom = camera_zoom
-	overview_system = -1 if bounds == SOLAR_SYSTEM.WORLD_BOUNDS else system_index
-	overview_bounds = bounds
-	system_overview = true
+func _minimum_camera_zoom() -> float:
+	return _fit_chart(get_viewport_rect().size, SOLAR_SYSTEM.WORLD_BOUNDS) * 0.9
 
-func _close_overview() -> void:
-	system_overview = false
-	camera_zoom = flight_zoom
+func _set_camera_zoom(value: float) -> void:
+	camera_zoom = value
+	camera_zoom_target = value
+
+func _pan_camera(offset: Vector2) -> void:
+	camera_position = (_camera_center() + offset / camera_zoom).clamp(Vector2.ZERO, WORLD_SIZE)
+	camera_following = false
+
+func _process(delta: float) -> void:
+	if camera_zoom == camera_zoom_target:
+		return
+	var previous_zoom := camera_zoom
+	var zoom_blend := 1.0 - exp(-20.0 * delta)
+	camera_zoom = previous_zoom * pow(camera_zoom_target / previous_zoom, zoom_blend)
+	if absf(camera_zoom / camera_zoom_target - 1.0) < 0.001:
+		camera_zoom = camera_zoom_target
+	if not camera_following:
+		var offset := camera_zoom_focus - get_viewport_rect().size * 0.5
+		camera_position = (camera_position + offset * (1.0 / previous_zoom - 1.0 / camera_zoom)).clamp(Vector2.ZERO, WORLD_SIZE)
+	_queue_flight_redraw()
 
 func _visible_world(camera: Transform2D) -> Rect2:
 	return Rect2(-camera.origin / camera_zoom, get_viewport_rect().size / camera_zoom).grow(220.0)
@@ -371,36 +461,292 @@ func _save_graphics_settings() -> void:
 func _create_top_controls() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
-	hyper_jump_button = Button.new()
-	hyper_jump_button.name = "HyperJump"
-	hyper_jump_button.text = "Hyper jump"
-	hyper_jump_button.tooltip_text = "Select hyper jump, then click to steer. Click again to exit."
-	hyper_jump_button.focus_mode = Control.FOCUS_NONE
-	hyper_jump_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	hyper_jump_button.offset_left = -328
-	hyper_jump_button.offset_top = 22
-	hyper_jump_button.offset_right = -180
-	hyper_jump_button.offset_bottom = 62
-	hyper_jump_button.pressed.connect(_toggle_hyper_jump)
-	layer.add_child(hyper_jump_button)
-	var settings_button := Button.new()
-	settings_button.text = "Settings  ⚙"
-	settings_button.focus_mode = Control.FOCUS_NONE
-	settings_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	settings_button.offset_left = -168
-	settings_button.offset_top = 22
-	settings_button.offset_right = -30
-	settings_button.offset_bottom = 62
-	settings_button.pressed.connect(_open_settings)
-	layer.add_child(settings_button)
+	_add_top_button(layer, "Fleet", -650, -500, "Spawn ships and switch control.", _open_fleet)
+	boost_button = _add_top_button(layer, "Boost", -488, -340, "Enable Boost, then click a destination. Toggle to exit.", _toggle_sustained_boost)
+	boost_button.name = "Boost"
+	hyperjump_context_button = Button.new()
+	hyperjump_context_button.text = "Initiate Hyper Jump"
+	hyperjump_context_button.visible = false
+	hyperjump_context_button.focus_mode = Control.FOCUS_NONE
+	hyperjump_context_button.custom_minimum_size = Vector2(190, 40)
+	hyperjump_context_button.pressed.connect(_initiate_context_hyperjump)
+	layer.add_child(hyperjump_context_button)
+	_add_top_button(layer, "Hangar", -326, -182, "Choose, design, and launch ships.", _open_hangar)
+	_add_top_button(layer, "Settings  ⚙", -168, -30, "", _open_settings)
 
-func _set_hyper_jump(enabled: bool, direction := Vector2.ZERO) -> void:
+func _add_top_button(layer: CanvasLayer, label: String, left: float, right: float, tooltip: String, action: Callable) -> Button:
+	var button := Button.new()
+	button.text = label
+	button.tooltip_text = tooltip
+	button.focus_mode = Control.FOCUS_NONE
+	button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	button.offset_left = left
+	button.offset_top = 22
+	button.offset_right = right
+	button.offset_bottom = 62
+	button.pressed.connect(action)
+	layer.add_child(button)
+	return button
+
+func _open_fleet() -> void:
+	if is_instance_valid(hangar_layer) or is_instance_valid(settings_layer):
+		return
+	if not is_instance_valid(fleet_dialog):
+		_create_fleet_dialog()
+	_refresh_fleet_designs()
+	_refresh_fleet_list()
+	fleet_status.text = "Parked ships hold position and are inactive until selected. Fleet lasts for this session."
+	fleet_dialog.popup_centered()
+
+func _create_fleet_dialog() -> void:
+	fleet_dialog = AcceptDialog.new()
+	fleet_dialog.title = "Fleet"
+	fleet_dialog.size = Vector2i(540, 440)
+	fleet_dialog.get_ok_button().text = "Close"
+	add_child(fleet_dialog)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	fleet_dialog.add_child(column)
+	var title := Label.new()
+	title.text = "Your ships"
+	column.add_child(title)
+	fleet_list = ItemList.new()
+	fleet_list.custom_minimum_size = Vector2(480, 170)
+	fleet_list.item_activated.connect(func(_index: int): _take_fleet_control())
+	column.add_child(fleet_list)
+	var control_button := Button.new()
+	control_button.text = "Take control of selected ship"
+	control_button.pressed.connect(_take_fleet_control)
+	column.add_child(control_button)
+	var label := Label.new()
+	label.text = "Spawn a ship near the controlled ship"
+	column.add_child(label)
+	fleet_designs = OptionButton.new()
+	column.add_child(fleet_designs)
+	var spawn_button := Button.new()
+	spawn_button.text = "Spawn selected design"
+	spawn_button.pressed.connect(_spawn_fleet_ship)
+	column.add_child(spawn_button)
+	fleet_status = Label.new()
+	fleet_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(fleet_status)
+
+func _refresh_fleet_designs() -> void:
+	fleet_designs.clear()
+	fleet_design_entries.clear()
+	fleet_design_entries.append({"name": "Current ship design", "parts": custom_parts.duplicate(true)})
+	for name in MODULES.PRESET_NAMES:
+		fleet_design_entries.append({"name": name, "parts": MODULES.preset_design(MODULES.PRESET_NAMES[name])})
+	var library: Variant = SHIP_LIBRARY.read()
+	if library is Dictionary:
+		var names: Array = library.keys()
+		names.sort()
+		for ship_name in names:
+			var parts := SHIP_LIBRARY.restore_design(library[ship_name])
+			if not parts.is_empty() and MODULES.validate(parts) == "":
+				fleet_design_entries.append({"name": str(ship_name), "parts": parts})
+	for design in fleet_design_entries:
+		fleet_designs.add_item(design.name)
+
+func _refresh_fleet_list() -> void:
+	fleet_list.clear()
+	for i in range(fleet.size()):
+		var ship: Dictionary = fleet[i]
+		fleet_list.add_item("%s%s" % [ship.name, "  ·  controlled" if i == active_fleet_index else "  ·  parked"])
+	fleet_list.select(active_fleet_index)
+
+func _save_active_fleet_ship() -> void:
+	var ship: Dictionary = fleet[active_fleet_index]
+	ship.parts = custom_parts.duplicate(true)
+	ship.position = ship_position
+	ship.heading = heading
+	ship.hull = player_hull
+	ship.shield = player_shield
+	ship.shield_delay = player_shield_delay
+
+func _draw_parked_ship(canvas: CanvasItem, ship: Dictionary) -> void:
+	var parts: Array = ship.parts
+	var center: Vector2 = MODULES.bounds(parts).get_center()
+	var borders: Dictionary = MODULES.armour_borders(parts)
+	for index in range(parts.size()):
+		var part: Dictionary = parts[index]
+		if MODULES.is_exterior_structure(part):
+			MODULES.draw_part(canvas, part, Vector2(part.x, part.y) * MODULES.CELL - center)
+			if borders.has(index):
+				MODULES.draw_armour_border(canvas, borders[index], -center)
+	for index in borders:
+		var part: Dictionary = parts[index]
+		if MODULES.is_armour_overlay(part):
+			MODULES.draw_part(canvas, part, Vector2(part.x, part.y) * MODULES.CELL - center)
+			MODULES.draw_armour_border(canvas, borders[index], -center)
+	for part in parts:
+		var position := Vector2(part.x, part.y) * MODULES.CELL - center
+		if MODULES.is_decoration(part):
+			MODULES.draw_part(canvas, part, position)
+		if part.type == "preset_light_gunship":
+			MODULES.draw_light_gunship_beacon(canvas, part, position, MODULES.navigation_light_brightness(elapsed))
+		if part.has("turret"):
+			MODULES.draw_mounted_turret(canvas, part.turret, position, 1.0, 1.0, Color.WHITE, 0.0, 0.0)
+
+func _park_fleet_ship(index: int) -> void:
+	var ship: Dictionary = fleet[index]
+	if is_instance_valid(ship.get("visual")):
+		ship.visual.hide()
+		ship.visual.queue_free()
+	var visual := Node2D.new()
+	var bounds := MODULES.bounds(ship.parts)
+	_add_sunlit_ship_layer(fleet_visuals, _draw_parked_ship.bind(ship), visual)
+	SHIP_RELIEF.bake(visual.material, ship.parts, bounds, 1.0)
+	ship.visual = visual
+	ship.radius = bounds.size.length() * 0.5
+	ship.has_beacon = ship.parts.any(func(part: Dictionary) -> bool: return part.type == "preset_light_gunship")
+	var body := StaticBody2D.new()
+	body.collision_layer = FLEET_COLLISION_LAYER
+	body.collision_mask = 0
+	body.position = ship.position
+	body.rotation = float(ship.heading) + PI / 2.0
+	_add_fleet_collision_shapes(body, ship.parts, bounds)
+	add_child(body)
+	ship.collision_body = body
+	visual.queue_redraw()
+
+func _add_fleet_collision_shapes(body: PhysicsBody2D, parts: Array, bounds: Rect2) -> void:
+	var center := bounds.get_center()
+	for part in parts:
+		if not MODULES.is_exterior_structure(part):
+			continue
+		var offset := Vector2(part.x, part.y) * MODULES.CELL - center
+		var polygons: Array[PackedVector2Array] = []
+		if MODULES.PRESET_TEXTURES.has(part.type):
+			polygons = MODULES.preset_alpha_polygons(part, offset)
+		else:
+			polygons = MODULES.structural_polygons(part, offset)
+		for polygon in polygons:
+			if polygon.size() < 3:
+				continue
+			var collider := CollisionPolygon2D.new()
+			collider.polygon = polygon
+			body.add_child(collider)
+
+func _spawn_fleet_ship() -> void:
+	if hyperjump_time >= 0.0:
+		fleet_status.text = "Wait until the hyperjump finishes before spawning a ship."
+		return
+	var selected := fleet_designs.selected
+	if selected < 0 or selected >= fleet_design_entries.size():
+		return
+	var design: Dictionary = fleet_design_entries[selected]
+	var parts: Array = design.parts.duplicate(true)
+	var error: String = MODULES.validate(parts)
+	if error != "":
+		fleet_status.text = "This design cannot fly: " + error
+		return
+	_save_active_fleet_ship()
+	var radius := MODULES.bounds(parts).size.length() * 0.5
+	var distance := cached_ship_bounds.size.length() * 0.5 + radius + 100.0
+	var position := ship_position
+	var clear := false
+	# Search outward in all directions, including near the edge of the world.
+	for attempt in range((fleet.size() + 1) * 16):
+		var ring := int(attempt / 16)
+		var angle := heading + PI / 2.0 + TAU * float(attempt % 16) / 16.0
+		position = ship_position + Vector2.RIGHT.rotated(angle) * (distance + float(ring) * (radius * 2.0 + 100.0))
+		if position.x < 0.0 or position.y < 0.0 or position.x > WORLD_SIZE.x or position.y > WORLD_SIZE.y:
+			continue
+		clear = true
+		for other in fleet:
+			var other_radius := MODULES.bounds(other.parts).size.length() * 0.5
+			if position.distance_to(other.position) < radius + other_radius + 50.0:
+				clear = false
+				break
+		if clear:
+			break
+	if not clear:
+		fleet_status.text = "No room to spawn here. Move away from the world edge and try again."
+		return
+	var stats: Dictionary = MODULES.stats(parts)
+	var name := "%s · %d" % [design.name, fleet.size() + 1]
+	fleet.append({"name": name, "parts": parts, "position": position, "heading": heading, "hull": float(stats.health), "shield": float(stats.shield), "shield_delay": 0.0})
+	_park_fleet_ship(fleet.size() - 1)
+	_refresh_fleet_list()
+	fleet_list.select(fleet.size() - 1)
+	fleet_status.text = "Spawned %s. Select it and take control to fly it." % name
+	_queue_flight_redraw()
+
+func _take_fleet_control() -> void:
+	var selected := fleet_list.get_selected_items()
+	if not selected.is_empty():
+		_switch_fleet_control(selected[0])
+
+func _switch_fleet_control(index: int) -> void:
+	if index < 0 or index >= fleet.size() or index == active_fleet_index:
+		return
+	if hyperjump_time >= 0.0:
+		if is_instance_valid(fleet_status):
+			fleet_status.text = "Wait until the hyperjump finishes before switching ships."
+		return
+	_save_active_fleet_ship()
+	_park_fleet_ship(active_fleet_index)
+	if sustained_boost_enabled:
+		_set_sustained_boost(false)
+	active_fleet_index = index
+	var ship: Dictionary = fleet[active_fleet_index]
+	var parked_body: StaticBody2D = ship.collision_body
+	remove_child(parked_body)
+	parked_body.queue_free()
+	ship.erase("collision_body")
+	custom_parts = ship.parts.duplicate(true)
+	ship_position = ship.position
+	ship_motion_remainder = Vector2.ZERO
+	heading = ship.heading
+	player_hull = ship.hull
+	player_shield = ship.shield
+	player_shield_delay = ship.shield_delay
+	ship_cache_ready = false
+	velocity = Vector2.ZERO
+	angular_velocity = 0.0
+	thrust = 0.0
+	_reset_player_exhaust()
+	boost_time = 0.0
+	boost_charging = false
+	boost_decelerating = false
+	rts_move_active = false
+	rts_attack_active = false
+	auto_approach = false
+	firing = false
+	laser_active = false
+	machine_gun_active = false
+	mining = false
+	selected_enemy = -1
+	selected_asteroid = -1
+	mining_asteroid = -1
+	for i in range(shield_impacts.size() - 1, -1, -1):
+		if shield_impacts[i].enemy == -1:
+			shield_impacts.remove_at(i)
+	for i in range(hull_impacts.size() - 1, -1, -1):
+		if hull_impacts[i].enemy == -1:
+			hull_impacts.remove_at(i)
+	turret_angles.clear()
+	player_machine_gun_shots.clear()
+	player_rocket_launches.clear()
+	camera_following = true
+	camera_position = ship_position
+	starfield_camera_center = ship_position
+	_ensure_ship_cache()
+	if is_instance_valid(fleet_dialog):
+		_refresh_fleet_designs()
+		_refresh_fleet_list()
+		fleet_status.text = "Controlling %s. Other ships hold position." % ship.name
+	_queue_flight_redraw()
+
+func _set_sustained_boost(enabled: bool, direction := Vector2.ZERO) -> void:
 	_ensure_ship_cache()
 	if enabled and (not has_flight_controls or float(_current_ship().speed) <= 0.0):
 		return
-	hyper_jump_decelerating = not enabled and hyper_jump_enabled
-	hyper_jump_enabled = enabled
-	hyper_jump_direction = direction
+	boost_decelerating = not enabled and sustained_boost_enabled
+	sustained_boost_enabled = enabled
+	sustained_boost_direction = direction
+	boost_destination_active = false
 	boost_charging = false
 	boost_charge = 0.0
 	boost_time = 0.0
@@ -408,35 +754,148 @@ func _set_hyper_jump(enabled: bool, direction := Vector2.ZERO) -> void:
 	rts_move_active = false
 	rts_attack_active = false
 	firing = false
-	if is_instance_valid(hyper_jump_button):
-		hyper_jump_button.text = "Exit hyper jump" if enabled else "Hyper jump"
+	if is_instance_valid(boost_button):
+		boost_button.text = "Exit Boost" if enabled else "Boost"
 	_queue_flight_redraw()
 
-func _toggle_hyper_jump() -> void:
-	_set_hyper_jump(not hyper_jump_enabled)
+func _toggle_sustained_boost() -> void:
+	_set_sustained_boost(not sustained_boost_enabled)
 
-func _steer_hyper_jump(screen_position: Vector2) -> void:
-	var direction := _screen_to_world(screen_position, false) - ship_position
-	if direction.length_squared() > 1.0:
-		hyper_jump_direction = direction.normalized()
-		_queue_flight_redraw()
+func _steer_sustained_boost(screen_position: Vector2) -> void:
+	boost_destination = _screen_to_world(screen_position)
+	boost_destination_active = true
+	rts_destination = boost_destination
+	rts_move_active = true
+	sustained_boost_direction = (boost_destination - ship_position).normalized()
+	_queue_flight_redraw()
+
+func _boost_acceleration(boost_speed: float, boost_acceleration: float) -> float:
+	var speed_fraction := clampf(velocity.length() / maxf(boost_speed, 0.01), 0.0, 1.0)
+	return boost_acceleration * lerpf(0.12, 0.65, speed_fraction)
+
+func _at_flight_destination(distance: float, radius: float, max_speed: float) -> bool:
+	return distance < radius and velocity.length_squared() < max_speed * max_speed
+
+func _update_boost_destination(boost_speed: float, boost_acceleration: float, ship_turn_speed: float, delta: float) -> void:
+	var to_destination := boost_destination - ship_position
+	var distance := to_destination.length()
+	if _at_flight_destination(distance, 4.0, 5.0):
+		ship_position = boost_destination
+		velocity = Vector2.ZERO
+		angular_velocity = 0.0
+		_set_sustained_boost(false)
+		boost_decelerating = false
+		thrust = move_toward(thrust, 0.0, delta * 5.0)
+		return
+	sustained_boost_direction = to_destination.normalized()
+	_steer_heading(to_destination if distance > RTS_DOCKING_DISTANCE else Vector2.ZERO, ship_turn_speed, delta)
+	var alignment := smoothstep(0.1, 0.95, Vector2.from_angle(heading).dot(sustained_boost_direction))
+	var arrival_speed := minf(distance * TRAVEL_APPROACH_RATE, sqrt(2.0 * boost_acceleration * distance) * 0.8)
+	var speed := minf(boost_speed, arrival_speed)
+	var desired_velocity := sustained_boost_direction * speed * lerpf(1.0, alignment, smoothstep(RTS_DOCKING_DISTANCE, 160.0, distance))
+	engine_boost_target = _navigation_exhaust(sustained_boost_direction, desired_velocity.length(), alignment, delta)
+	var movement_acceleration := _boost_acceleration(boost_speed, boost_acceleration) if desired_velocity.length() > velocity.length() else boost_acceleration
+	velocity = velocity.move_toward(desired_velocity, movement_acceleration * delta)
+	thrust = move_toward(thrust, alignment if speed > 5.0 else 0.0, delta * THROTTLE_RAMP)
+
+func _can_hyperjump() -> bool:
+	var ship := _current_ship()
+	return has_flight_controls and float(ship.speed) > 0.0
+
+func _close_hyperjump_chart() -> void:
+	hyperjump_context_button.hide()
+	hyperjump_context_destination = -1
+
+func _hyperjump_pick_radius(system: Dictionary) -> float:
+	return maxf(24.0, float(system.radius) * camera_zoom + 12.0)
+
+func _system_at_screen(point: Vector2) -> int:
+	if camera_zoom >= MAP_LABEL_ZOOM:
+		return -1
+	var camera := _world_transform()
+	for index in SOLAR_SYSTEM.SYSTEMS.size():
+		var system: Dictionary = SOLAR_SYSTEM.SYSTEMS[index]
+		var center := camera * (system.center as Vector2)
+		var radius := maxf(6.0, float(system.radius) * camera_zoom)
+		var label_bounds := Rect2(center + Vector2(-90.0, radius + 5.0), Vector2(180.0, 36.0))
+		if point.distance_to(center) <= _hyperjump_pick_radius(system) or label_bounds.has_point(point):
+			return index
+	return -1
+
+func _show_hyperjump_context(destination: int, screen_position: Vector2) -> void:
+	hyperjump_context_destination = destination
+	var available := _can_hyperjump() and destination != solar_system.nearest_system(ship_position) and hyperjump_time < 0.0
+	hyperjump_context_button.disabled = not available
+	hyperjump_context_button.tooltip_text = "Travel to %s" % SOLAR_SYSTEM.SYSTEMS[destination].name if available else "Choose another system with a flight-capable ship."
+	var button_size := Vector2(190, 40)
+	hyperjump_context_button.position = screen_position.clamp(Vector2.ZERO, (get_viewport_rect().size - button_size).max(Vector2.ZERO))
+	hyperjump_context_button.size = button_size
+	hyperjump_context_button.show()
+
+func _initiate_context_hyperjump() -> void:
+	var destination := hyperjump_context_destination
+	_close_hyperjump_chart()
+	if destination >= 0:
+		_execute_hyperjump(solar_system.nearest_system(ship_position), destination)
+
+func _execute_hyperjump(source: int, destination: int) -> void:
+	if source == destination or not _can_hyperjump() or hyperjump_time >= 0.0:
+		return
+	hyperjump_destination = destination
+	hyperjump_arrival = SOLAR_SYSTEM.hyperjump_arrival(source, destination)
+	_set_sustained_boost(false)
+	boost_decelerating = false
+	rts_move_active = false
+	rts_attack_active = false
+	firing = false
+	hyperjump_arrival_until = 0.0
+	hyperjump_time = 0.0
+	boost_button.disabled = true
+	_queue_flight_redraw()
+
+func _update_hyperjump(jump_speed: float, jump_acceleration: float, ship_turn_speed: float, delta: float) -> void:
+	hyperjump_time += delta
+	var to_destination := hyperjump_arrival - ship_position
+	var distance := to_destination.length()
+	if _at_flight_destination(distance, 4.0, 5.0):
+		ship_position = hyperjump_arrival
+		velocity = Vector2.ZERO
+		angular_velocity = 0.0
+		hyperjump_time = -1.0
+		boost_button.disabled = false
+		hyperjump_arrival_until = elapsed + 3.0
+		thrust = 0.0
+		return
+	_steer_heading(to_destination, ship_turn_speed, delta)
+	var alignment := smoothstep(0.94, 0.995, Vector2.from_angle(heading).dot(to_destination.normalized()))
+	var arrival_speed := minf(distance * TRAVEL_APPROACH_RATE, sqrt(2.0 * jump_acceleration * distance) * 0.8)
+	var course := to_destination.normalized()
+	var desired_velocity := course * minf(jump_speed, arrival_speed) * alignment
+	engine_boost_target = _navigation_exhaust(course, desired_velocity.length(), alignment, delta)
+	velocity = velocity.move_toward(desired_velocity, jump_acceleration * delta)
+	thrust = move_toward(thrust, alignment if arrival_speed > 5.0 else 0.0, delta * 5.0)
 
 func _open_settings() -> void:
 	firing = false
 	rts_dragging = false
 	radial_menu_open = false
+	camera_dragging = false
 	if is_instance_valid(settings_layer):
 		return
+	_close_hyperjump_chart()
 	boost_charging = false
 	boost_charge = 0.0
 	set_physics_process(false)
 	engine_audio.silence()
+	heritage_gun_audio.stop()
 	set_process_unhandled_input(false)
 	settings_layer = CanvasLayer.new()
 	settings_layer.layer = 20
 	add_child(settings_layer)
 	var menu: Control = SETTINGS_MENU.new()
-	menu.initial_zoom = flight_zoom if system_overview else camera_zoom
+	_set_camera_zoom(camera_zoom)
+	menu.initial_zoom = camera_zoom
+	menu.minimum_zoom = _minimum_camera_zoom()
 	menu.initial_graphics_quality = graphics_quality
 	menu.initial_frame_cap = frame_cap
 	menu.initial_vsync = vsync_enabled
@@ -448,10 +907,10 @@ func _open_settings() -> void:
 		_save_graphics_settings()
 	)
 	menu.control_mode_changed.connect(func(value: int):
-		if hyper_jump_enabled:
-			_set_hyper_jump(false)
+		if sustained_boost_enabled:
+			_set_sustained_boost(false)
 		control_mode = clampi(value, 0, 1)
-		rts_camera_detached = false
+		camera_following = true
 		rts_selected = false
 		rts_dragging = false
 		rts_move_active = false
@@ -475,10 +934,9 @@ func _open_settings() -> void:
 		_apply_graphics_settings()
 		_save_graphics_settings()
 	)
-	menu.build_requested.connect(_open_builder_from_settings)
+	menu.hangar_requested.connect(_open_hangar)
 	menu.zoom_changed.connect(func(value: float):
-		system_overview = false
-		camera_zoom = value
+		_set_camera_zoom(value)
 		_queue_flight_redraw()
 	)
 	menu.closed.connect(_close_settings)
@@ -508,27 +966,38 @@ func _load_custom_ship() -> void:
 			custom_parts = migrated
 			ship_cache_ready = false
 
-func _open_builder_from_settings() -> void:
-	if hyper_jump_enabled:
-		_set_hyper_jump(false)
+func _open_hangar() -> void:
+	if is_instance_valid(hangar_layer):
+		return
+	if sustained_boost_enabled:
+		_set_sustained_boost(false)
 	_close_settings()
+	_close_hyperjump_chart()
+	firing = false
+	rts_dragging = false
+	radial_menu_open = false
+	camera_dragging = false
+	boost_charging = false
+	boost_charge = 0.0
+	engine_audio.silence()
+	heritage_gun_audio.stop()
 	set_physics_process(false)
 	set_process_unhandled_input(false)
-	builder_layer = CanvasLayer.new()
-	builder_layer.layer = 20
-	add_child(builder_layer)
-	var builder: Control = SHIP_BUILDER.new()
-	builder.initial_parts = custom_parts.duplicate(true)
-	builder.base_turn_speed = turn_speed
-	builder_layer.add_child(builder)
-	builder.closed.connect(_close_builder)
-	builder.deploy.connect(_deploy_custom_ship)
+	hangar_layer = CanvasLayer.new()
+	hangar_layer.layer = 20
+	add_child(hangar_layer)
+	var hangar := HANGAR.new()
+	hangar.current_parts = custom_parts.duplicate(true)
+	hangar.preview_draw = _draw_parked_ship
+	hangar.closed.connect(_close_hangar)
+	hangar.launch_requested.connect(_deploy_custom_ship)
+	hangar_layer.add_child(hangar)
 
-func _close_builder() -> void:
-	if not is_instance_valid(builder_layer):
+func _close_hangar() -> void:
+	if not is_instance_valid(hangar_layer):
 		return
-	builder_layer.queue_free()
-	builder_layer = null
+	hangar_layer.queue_free()
+	hangar_layer = null
 	set_physics_process(true)
 	set_process_unhandled_input(true)
 
@@ -552,14 +1021,22 @@ func _deploy_custom_ship(parts: Array) -> void:
 	player_shield = _player_max_shield()
 	player_shield_delay = 0.0
 	velocity = Vector2.ZERO
-	hyper_jump_decelerating = false
+	boost_decelerating = false
 	angular_velocity = 0.0
 	thrust = 0.0
+	_reset_player_exhaust()
 	boost_time = 0.0
 	boost_charging = false
+	rts_move_active = false
+	rts_attack_active = false
+	firing = false
 	laser_active = false
 	machine_gun_active = false
-	_close_builder()
+	hyperjump_time = -1.0
+	hyperjump_arrival_until = 0.0
+	boost_button.disabled = false
+	_save_active_fleet_ship()
+	_close_hangar()
 	_queue_flight_redraw()
 
 func _ensure_ship_cache() -> void:
@@ -569,18 +1046,77 @@ func _ensure_ship_cache() -> void:
 	cached_ship_bounds = MODULES.bounds(custom_parts)
 	has_flight_controls = MODULES.has_command_deck(custom_parts)
 	cached_engines.clear()
+	cached_turret_mounts.clear()
 	for light in player_visual.engine_lights:
 		light.queue_free()
 	player_visual.engine_lights.clear()
 	var center := cached_ship_bounds.get_center()
 	SHIP_RELIEF.bake(player_visual.material, custom_parts, cached_ship_bounds, 1.0)
 	player_visual.queue_redraw()
+	for collider in player_fleet_body.get_children():
+		player_fleet_body.remove_child(collider)
+		collider.queue_free()
+	_add_fleet_collision_shapes(player_fleet_body, custom_parts, cached_ship_bounds)
 	cached_hull_shapes.clear()
 	cached_armour_borders = MODULES.armour_borders(custom_parts)
 	var uses_shaped_hull := custom_parts.any(func(part: Dictionary) -> bool:
 		return MODULES.is_exterior_structure(part) and (part.type in ["wedge_half", "armor_wedge"] or MODULES.footprint(part).size != Vector2i.ONE)
 	)
 	for part in custom_parts:
+		if part.has("turret"):
+			cached_turret_mounts.append(part)
+		if MODULES.PRESET_TEXTURES.has(part.type):
+			# Match the sprite fitting used by draw_part, then place each outlet at
+			# the centre of the engine bell in the original image coordinates.
+			var source_size: Vector2 = MODULES.preset_texture(part).get_size()
+			var sprite_rect := MODULES.preset_draw_rect(part, Vector2(part.x, part.y) * MODULES.CELL - center)
+			var fit := sprite_rect.size.x / source_size.x
+			var origin := sprite_rect.position
+			var outlets: Array = []
+			var source_flare_size := Vector2.ONE
+			var individual_flare_sizes: Array[Vector2] = []
+			match part.type:
+				"pixel_custom":
+					_add_pixel_engine_nozzles(MODULES.preset_texture(part).get_image(), origin, fit)
+				"preset_frigate":
+					outlets = [Vector2(220, 1120), Vector2(394, 1120)]
+					source_flare_size = Vector2(5.5, 2.0)
+				"preset_scout":
+					outlets = [Vector2(77, 496), Vector2(190, 496)]
+					source_flare_size = Vector2(2.2, 1.15)
+				"preset_pixel_starter":
+					outlets = [Vector2(6, 62), Vector2(25, 62)]
+					source_flare_size = Vector2(0.40, 0.25)
+				"preset_starter_2":
+					outlets = [Vector2(15.5, 99), Vector2(34.5, 99)]
+					source_flare_size = Vector2(0.60, 0.38)
+				"preset_light_gunship":
+					outlets = [Vector2(9.5, 109), Vector2(28.5, 109)]
+					source_flare_size = Vector2(0.60, 0.38)
+				"preset_light_destroyer", MODULES.LIGHT_CRUISER:
+					# The outer bells end three pixels ahead of the inner pair.
+					outlets = [Vector2(8.5, 165), Vector2(19.5, 168), Vector2(42.5, 168), Vector2(53.5, 165)]
+					var outer_flare := Vector2(0.78, 0.42)
+					var inner_flare := Vector2(0.96, 0.52)
+					individual_flare_sizes = [outer_flare, inner_flare, inner_flare, outer_flare]
+				MODULES.HD_LIGHT_CRUISER:
+					outlets = [Vector2(53, 830), Vector2(109, 843), Vector2(221, 843), Vector2(277, 830)]
+					var outer_flare := Vector2(4.0, 2.1)
+					var inner_flare := Vector2(4.8, 2.6)
+					individual_flare_sizes = [outer_flare, inner_flare, inner_flare, outer_flare]
+				"preset_armoured_starter":
+					outlets = [Vector2(169, 1464), Vector2(591, 1464)]
+					source_flare_size = Vector2(9.5, 6.0)
+			for i in range(outlets.size()):
+				var size := source_flare_size if individual_flare_sizes.is_empty() else individual_flare_sizes[i]
+				cached_engines.append({"nozzle": Transform2D(0.0, origin + outlets[i] * fit), "size": size * fit})
+			if MODULES.CRUISER_TURRET_LAYOUTS.has(part.type):
+				var mounts: Array = MODULES.CRUISER_TURRET_LAYOUTS[part.type].mounts
+				for index in range(mounts.size()):
+					cached_turret_mounts.append({
+						"x": part.x, "y": part.y, "type": part.type, "turret": MODULES.CRUISER_MACHINE_LASER,
+						"cruiser_index": index, "local_position": origin + mounts[index] * fit, "pixel_scale": fit,
+					})
 		if uses_shaped_hull and MODULES.is_exterior_structure(part):
 			cached_hull_shapes.append_array(MODULES.material_polygons(part, Vector2(part.x, part.y) * MODULES.CELL - center))
 		if MODULES.ENGINE_NOZZLE_OFFSETS.has(part.type):
@@ -596,13 +1132,36 @@ func _ensure_ship_cache() -> void:
 		_add_engine_light(player_visual, engine.nozzle)
 	ship_cache_ready = true
 
+func _add_pixel_engine_nozzles(image: Image, origin: Vector2, fit: float) -> void:
+	# Custom artwork has no hardpoints. Use the widest solid runs along the stern.
+	var hull := image.get_used_rect()
+	if not hull.has_area():
+		return
+	var last_row := hull.end.y - 1
+	var outlets: Array[Vector2i] = []
+	var start := -1
+	for x in range(hull.position.x, hull.end.x + 1):
+		if x < hull.end.x and image.get_pixel(x, last_row).a > 0.0:
+			if start < 0:
+				start = x
+		elif start >= 0:
+			outlets.append(Vector2i(start, x - start))
+			start = -1
+	outlets.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y > b.y if a.y != b.y else a.x < b.x)
+	for i in range(mini(outlets.size(), 4)):
+		var outlet := outlets[i]
+		var center := Vector2(outlet.x + outlet.y * 0.5, hull.end.y)
+		var width := clampf(outlet.y * 0.08, 0.28, 0.95)
+		var length := clampf(outlet.y * 0.055, 0.22, 0.62)
+		cached_engines.append({"nozzle": Transform2D(0.0, origin + center * fit), "size": Vector2(width, length) * fit})
+
 func _custom_stats() -> Dictionary:
 	_ensure_ship_cache()
 	return cached_ship_stats
 
 func _current_ship() -> Dictionary:
 	var totals := _custom_stats()
-	return {"speed": totals.speed, "acceleration": totals.acceleration, "turn": totals.maneuver, "drag": 1.0}
+	return {"speed": totals.speed, "acceleration": totals.acceleration, "turn": totals.maneuver}
 
 func _player_max_hull() -> float:
 	return _custom_stats().health
@@ -677,6 +1236,7 @@ func _spawn_enemy_wave() -> void:
 		var facing := rng.randf_range(0.0, TAU)
 		var enemy := {
 			"position": position, "heading": facing, "aim_angle": facing, "velocity": Vector2.ZERO,
+			"angular_velocity": 0.0, "turn_speed": turn_speed * float(stats.maneuver),
 			"hostile": false, "patrol_destination": ship_position, "patrol_origin": ship_position,
 			"health": max_health, "max_health": max_health, "shield": max_shield, "max_shield": max_shield,
 			"shield_delay": 0.0, "fire_cooldown": rng.randf_range(0.2, 1.0), "fire_interval": fire_interval,
@@ -1042,7 +1602,7 @@ func _update_neutral_ship(enemy: Dictionary, delta: float) -> void:
 	var current_velocity: Vector2 = enemy.velocity
 	enemy.velocity = current_velocity.move_toward(direction * float(enemy.speed) * 0.45, ENEMY_ACCELERATION * delta)
 	enemy.position += enemy.velocity * delta
-	enemy.heading = lerp_angle(enemy.heading, direction.angle(), 1.0 - exp(-4.0 * delta))
+	_steer_other_ship(enemy, direction, delta)
 	enemy.aim_angle = enemy.heading
 
 func _enemy_combat_velocity(enemy: Dictionary, away: Vector2, distance: float, extra_range: float) -> Vector2:
@@ -1064,27 +1624,26 @@ func _enemy_combat_velocity(enemy: Dictionary, away: Vector2, distance: float, e
 	var sideways_limit := sqrt(maxf(0.0, speed * speed - outward_speed * outward_speed))
 	return away * outward_speed + tangent * clampf(steered.dot(tangent), -sideways_limit, sideways_limit)
 
-func _turret_key(part: Dictionary) -> Vector2i:
-	return Vector2i(int(part.x), int(part.y))
+func _turret_key(part: Dictionary) -> Vector3i:
+	return Vector3i(int(part.x), int(part.y), int(part.get("cruiser_index", -1)))
 
 func _turret_angle(part: Dictionary) -> float:
 	var rest_angle := heading + float(int(part.get("rotation", 0))) * PI / 2.0
 	return float(turret_angles.get(_turret_key(part), rest_angle))
 
 func _update_turrets(delta: float) -> void:
+	_ensure_ship_cache()
 	var target_position := _aim_world_position()
 	var tracked_turrets: Array = WEAPON_SLOTS[selected_weapon - 1].turrets
-	for part in custom_parts:
-		var kind: String = part.get("turret", "")
-		if kind not in MODULES.TURRETS:
-			continue
+	for part in cached_turret_mounts:
+		var kind: String = part.turret
 		var current := _turret_angle(part)
 		var desired := heading + float(int(part.get("rotation", 0))) * PI / 2.0
 		if kind in tracked_turrets:
 			var direction := target_position - _turret_world_position(part)
 			if direction.length_squared() > 0.001:
 				desired = direction.angle()
-		var speed: float = MODULES.TYPES[kind].turret_turn_speed
+		var speed: float = CRUISER_TURRET_TURN_SPEED if kind == MODULES.CRUISER_MACHINE_LASER else MODULES.TYPES[kind].turret_turn_speed
 		var change := clampf(angle_difference(current, desired), -speed * delta, speed * delta)
 		turret_angles[_turret_key(part)] = wrapf(current + change, -PI, PI)
 
@@ -1177,7 +1736,7 @@ func _update_combat(delta: float) -> void:
 		if distance > 0.01:
 			aim = to_player + velocity * minf(distance / 800.0, 1.0) * 0.65
 			enemy.aim_angle = aim.angle()
-			enemy.heading = lerp_angle(enemy.heading, aim.angle(), 1.0 - exp(-4.0 * delta))
+			_steer_other_ship(enemy, aim, delta)
 		var desired_velocity := _enemy_combat_velocity(enemy, away, distance, extra_range)
 		var current_velocity: Vector2 = enemy.velocity
 		enemy.velocity = current_velocity.move_toward(desired_velocity, ENEMY_ACCELERATION * delta)
@@ -1199,18 +1758,40 @@ func _update_combat(delta: float) -> void:
 			player_fire_cooldown = 0.4
 	if firing and selected_weapon == 3 and machine_gun_cooldown <= 0.0:
 		var fired := false
-		for part in custom_parts:
-			if part.get("turret", "") in ["machine_gun", "retro_machine_gun", "long_machine_gun"] and _turret_is_aimed(part, aim_position):
+		var heritage_fired := false
+		for part in cached_turret_mounts:
+			if part.turret in WEAPON_SLOTS[2].turrets and _turret_is_aimed(part, aim_position):
 				var key := _turret_key(part)
 				var burst := _next_machine_gun_shot(player_machine_gun_shots.get(key, {}))
 				player_machine_gun_shots[key] = burst
 				var angle := _turret_angle(part)
-				var muzzle := _turret_world_position(part) + MODULES.machine_gun_muzzle_offset(burst.barrel, angle + PI / 2.0, 1.0, part.turret == "long_machine_gun", part.turret == "retro_machine_gun")
-				var direction := Vector2.from_angle(angle).rotated(rng.randf_range(-0.035, 0.035))
-				projectiles.append({"position": muzzle, "velocity": direction * 1200.0 + velocity * 0.25, "friendly": true, "damage": 4.0, "kind": "bullet"})
+				var origin := _turret_world_position(part)
+				if part.turret == MODULES.CRUISER_MACHINE_LASER:
+					var muzzle := origin + MODULES.cruiser_laser_muzzle_offset(part, burst.barrel, angle + PI / 2.0, _cruiser_barrel_recoil(burst))
+					projectiles.append({
+						"position": muzzle, "muzzle": muzzle, "velocity": Vector2.from_angle(angle) * CRUISER_LASER_SPEED,
+						"friendly": true, "damage": CRUISER_LASER_DAMAGE, "kind": MODULES.CRUISER_MACHINE_LASER,
+					})
+				else:
+					var muzzle := origin + MODULES.machine_gun_muzzle_offset(burst.barrel, angle + PI / 2.0, 1.0, part.turret == "long_machine_gun", part.turret == "retro_machine_gun")
+					var direction := Vector2.from_angle(angle).rotated(rng.randf_range(-0.035, 0.035))
+					projectiles.append({"position": muzzle, "velocity": direction * 1200.0 + velocity * 0.25, "friendly": true, "damage": 4.0, "kind": "bullet"})
 				fired = true
+				heritage_fired = heritage_fired or part.turret == "retro_machine_gun"
+		if custom_parts.any(func(part: Dictionary) -> bool: return part.type == "preset_frigate"):
+			# The artwork has fixed forward-facing guns, so their shots follow the ship's heading.
+			var forward := Vector2.from_angle(heading)
+			var ship_rotation := heading + PI / 2.0
+			for muzzle: Vector2 in [Vector2(-100, -495), Vector2(100, -495), Vector2(-100, -220), Vector2(100, -220)]:
+				var muzzle_world := ship_position + muzzle.rotated(ship_rotation)
+				projectiles.append({"position": muzzle_world, "velocity": forward * 1200.0 + velocity * 0.25, "friendly": true, "damage": 4.0, "kind": "bullet"})
+			fired = true
+			heritage_fired = true
 		if fired:
 			machine_gun_cooldown = 0.10
+		if heritage_fired:
+			heritage_gun_audio.pitch_scale = randf_range(0.96, 1.04)
+			heritage_gun_audio.play()
 	if firing and selected_weapon == 4 and rocket_cooldown <= 0.0:
 		var fired := false
 		for part in custom_parts:
@@ -1298,16 +1879,22 @@ func _update_combat(delta: float) -> void:
 				player_hull -= damage - absorbed
 				hit = true
 				if player_hull <= 0:
-					if hyper_jump_enabled:
-						_set_hyper_jump(false)
+					if sustained_boost_enabled:
+						_set_sustained_boost(false)
+					_close_hyperjump_chart()
+					hyperjump_time = -1.0
+					boost_button.disabled = false
+					hyperjump_arrival_until = 0.0
 					player_hull = _player_max_hull()
 					player_shield = _player_max_shield()
 					player_shield_delay = 0.0
 					shield_impacts.clear()
 					hull_impacts.clear()
 					ship_position = SOLAR_SYSTEM.starting_position()
+					ship_motion_remainder = Vector2.ZERO
 					velocity = Vector2.ZERO
-					hyper_jump_decelerating = false
+					_reset_player_exhaust()
+					boost_decelerating = false
 					selected_asteroid = -1
 					selected_enemy = -1
 					mining_asteroid = -1
@@ -1450,6 +2037,49 @@ func _aim_world_position() -> Vector2:
 			return asteroids[selected_asteroid].position
 	return _screen_to_world(get_viewport().get_mouse_position())
 
+func _fleet_ship_at_screen(screen_position: Vector2) -> int:
+	var world_position := _screen_to_world(screen_position, false)
+	for i in range(fleet.size() - 1, -1, -1):
+		var ship: Dictionary = fleet[i]
+		var parts: Array = custom_parts if i == active_fleet_index else ship.parts
+		var position: Vector2 = ship_position if i == active_fleet_index else ship.position
+		var ship_heading: float = heading if i == active_fleet_index else float(ship.heading)
+		var bounds: Rect2 = MODULES.bounds(parts)
+		var local := (world_position - position).rotated(-ship_heading - PI / 2.0)
+		if bounds.size.length() * camera_zoom < 16.0 and screen_position.distance_to(_world_transform() * position) <= 8.0:
+			return i
+		if not Rect2(-bounds.size * 0.5, bounds.size).has_point(local):
+			continue
+		for part in parts:
+			if not MODULES.is_exterior_structure(part):
+				continue
+			var offset := Vector2(part.x, part.y) * MODULES.CELL - bounds.get_center()
+			for polygon in MODULES.structural_polygons(part, offset):
+				if Geometry2D.is_point_in_polygon(local, polygon):
+					return i
+	return -1
+
+func _show_fleet_context(index: int, screen_position: Vector2) -> void:
+	if index < 0 or index >= fleet.size():
+		return
+	if not is_instance_valid(fleet_context_menu):
+		fleet_context_menu = PopupMenu.new()
+		add_child(fleet_context_menu)
+		fleet_context_menu.id_pressed.connect(func(id: int):
+			if id == 1:
+				_switch_fleet_control(fleet_context_index)
+		)
+	fleet_context_index = index
+	fleet_context_menu.clear()
+	fleet_context_menu.add_item(str(fleet[index].name), 0)
+	fleet_context_menu.set_item_disabled(0, true)
+	fleet_context_menu.add_separator()
+	fleet_context_menu.add_item("Already under your control" if index == active_fleet_index else "Take control", 1)
+	fleet_context_menu.set_item_disabled(2, index == active_fleet_index or hyperjump_time >= 0.0)
+	var menu_position := screen_position.clamp(Vector2.ZERO, (get_viewport_rect().size - Vector2(240, 90)).max(Vector2.ZERO))
+	fleet_context_menu.position = Vector2i(menu_position)
+	fleet_context_menu.popup()
+
 func _rts_issue_order(screen_position: Vector2) -> void:
 	var previous_enemy := selected_enemy
 	var previous_asteroid := selected_asteroid
@@ -1479,15 +2109,34 @@ func _finish_rts_selection(screen_position: Vector2) -> void:
 	_queue_flight_redraw()
 
 func _input(event: InputEvent) -> void:
-	if is_instance_valid(builder_layer):
-		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
-			var builder := builder_layer.get_child(0)
-			if builder.has_open_design_dialog():
-				builder.close_design_dialog()
-			else:
-				builder.request_close()
-			get_viewport().set_input_as_handled()
+	if is_instance_valid(hangar_layer):
 		return
+	if fleet_click_index >= 0 and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		var clicked_index := fleet_click_index
+		fleet_click_index = -1
+		if event.position.distance_to(fleet_click_start) <= 8.0:
+			rts_dragging = false
+			firing = false
+			_show_fleet_context(clicked_index, event.position)
+			get_viewport().set_input_as_handled()
+			return
+	if camera_dragging:
+		if event is InputEventMouseMotion:
+			_pan_camera(-event.relative)
+			_queue_flight_redraw()
+			get_viewport().set_input_as_handled()
+			return
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			camera_dragging = false
+			get_viewport().set_input_as_handled()
+			return
+	if hyperjump_context_button.visible:
+		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			_close_hyperjump_chart()
+			get_viewport().set_input_as_handled()
+			return
+		if event is InputEventMouseButton and event.pressed and not hyperjump_context_button.get_global_rect().has_point(event.position):
+			_close_hyperjump_chart()
 	if radial_menu_open:
 		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 			radial_menu_open = false
@@ -1498,7 +2147,8 @@ func _input(event: InputEvent) -> void:
 			var distance: float = event.position.distance_to(radial_menu_position)
 			radial_menu_open = false
 			if event.button_index == MOUSE_BUTTON_LEFT and distance >= 18.0 and distance <= RADIAL_MENU_RADIUS:
-				_toggle_hyper_jump()
+				if event.position.y < radial_menu_position.y:
+					_toggle_sustained_boost()
 			get_viewport().set_input_as_handled()
 			_queue_flight_redraw()
 			return
@@ -1507,12 +2157,12 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		_queue_flight_redraw()
 		return
-	if event is InputEventKey and event.keycode == KEY_SPACE and not event.echo and control_mode == 0:
+	if event is InputEventKey and event.keycode == KEY_SPACE and not event.echo and control_mode == 0 and hyperjump_time < 0.0:
 		_ensure_ship_cache()
 		if has_flight_controls and not is_instance_valid(settings_layer):
-			if hyper_jump_enabled:
+			if sustained_boost_enabled:
 				if event.pressed:
-					_set_hyper_jump(false)
+					_set_sustained_boost(false)
 			elif event.pressed and not boost_charging:
 				boost_charging = true
 				boost_charge = 0.0
@@ -1521,6 +2171,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		if is_instance_valid(fleet_context_menu) and fleet_context_menu.visible:
+			fleet_context_menu.hide()
+			get_viewport().set_input_as_handled()
+			return
 		if is_instance_valid(settings_layer):
 			_close_settings()
 		else:
@@ -1539,6 +2193,8 @@ func _notification(what: int) -> void:
 		firing = false
 		rts_dragging = false
 		radial_menu_open = false
+		camera_dragging = false
+		fleet_click_index = -1
 		
 func _make_rocket(origin: Vector2, angle: float, carrier_velocity: Vector2, friendly: bool, damage: float, scale_factor: float = 1.0) -> Dictionary:
 	var forward := Vector2.from_angle(angle)
@@ -1603,15 +2259,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_SPACE:
 				if control_mode != 1:
 					return
-				rts_camera_detached = false
-				if system_overview:
-					_close_overview()
+				camera_following = true
+			KEY_F:
+				camera_following = true
 			KEY_TAB:
 				_cycle_target()
-			KEY_M:
-				_toggle_overview(false)
-			KEY_G:
-				_toggle_overview(true)
 			KEY_1, KEY_KP_1:
 				selected_weapon = 1
 			KEY_2, KEY_KP_2:
@@ -1630,6 +2282,28 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if not event.pressed:
 			return
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			var step := pow(CAMERA_ZOOM_STEP, event.factor if event.factor > 0.0 else 1.0)
+			var zoom_factor := step if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / step
+			camera_zoom_target = clampf(camera_zoom_target * zoom_factor, _minimum_camera_zoom(), SETTINGS_MENU.MAX_ZOOM)
+			camera_zoom_focus = event.position
+			get_viewport().set_input_as_handled()
+			return
+		if event.button_index == MOUSE_BUTTON_LEFT and event.shift_pressed:
+			camera_dragging = true
+			rts_dragging = false
+			firing = false
+			get_viewport().set_input_as_handled()
+			return
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			var system_index := _system_at_screen(event.position)
+			if system_index >= 0:
+				_show_hyperjump_context(system_index, event.position)
+				get_viewport().set_input_as_handled()
+				return
+		if hyperjump_time >= 0.0 and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]:
+			get_viewport().set_input_as_handled()
+			return
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
 			var margin := Vector2.ONE * (RADIAL_MENU_RADIUS + 4.0)
 			radial_menu_position = event.position.clamp(margin, (get_viewport_rect().size - margin).max(margin))
@@ -1639,16 +2313,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			_queue_flight_redraw()
 			return
-		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
-			if system_overview:
-				_close_overview()
-			else:
-				var zoom_factor := 1.12 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12
-				camera_zoom = clampf(camera_zoom * zoom_factor, SETTINGS_MENU.MIN_ZOOM, SETTINGS_MENU.MAX_ZOOM)
-			_queue_flight_redraw()
-			return
-		if hyper_jump_enabled and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-			_steer_hyper_jump(event.position)
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			var clicked_ship := _fleet_ship_at_screen(event.position)
+			if clicked_ship >= 0:
+				fleet_click_index = clicked_ship
+				fleet_click_start = event.position
+				if control_mode == 1:
+					rts_dragging = true
+					rts_drag_start = event.position
+					rts_drag_end = event.position
+				get_viewport().set_input_as_handled()
+				return
+		if sustained_boost_enabled and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+			_steer_sustained_boost(event.position)
 			get_viewport().set_input_as_handled()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
@@ -1670,20 +2347,19 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _launch_boost() -> void:
 	_ensure_ship_cache()
-	if not has_flight_controls:
-		if hyper_jump_enabled:
-			_set_hyper_jump(false)
+	if not has_flight_controls or float(_current_ship().speed) <= 0.0:
+		boost_charging = false
+		boost_charge = 0.0
+		if sustained_boost_enabled:
+			_set_sustained_boost(false)
 		return
 	boost_charging = false
-	hyper_jump_decelerating = false
+	boost_decelerating = false
 	boost_power = boost_charge
 	boost_duration = lerpf(0.85, 2.0, boost_power)
 	boost_time = boost_duration
 	if not cached_engines.is_empty():
 		engine_audio.play_boost(boost_power)
-	var speed_factor: float = _current_ship().speed
-	var launch_speed := lerpf(1200.0, 1800.0, boost_power) * speed_factor
-	velocity += Vector2.from_angle(heading) * launch_speed
 	auto_approach = false
 	boost_charge = 0.0
 
@@ -1733,6 +2409,42 @@ func _push_player(push: Vector2) -> void:
 	var inward := velocity.dot(direction)
 	if inward < 0.0:
 		velocity -= direction * inward
+
+func _advance_player(delta: float) -> void:
+	var origin := ship_position
+	var motion := velocity * delta
+	if velocity != Vector2.ZERO:
+		motion += ship_motion_remainder
+	var target := origin + motion
+	_move_player_against_fleet(target)
+	ship_motion_remainder = motion - (target - origin) if ship_position == target else Vector2.ZERO
+
+func _move_player_against_fleet(target: Vector2) -> void:
+	target = target.clamp(Vector2.ZERO, WORLD_SIZE)
+	if fleet.size() <= 1:
+		ship_position = target
+		return
+	player_fleet_body.position = ship_position
+	player_fleet_body.rotation = heading + PI / 2.0
+	var motion := target - ship_position
+	# Sweep the full motion, then allow the unblocked component to slide along the hull.
+	for attempt in range(2):
+		var hit := player_fleet_body.move_and_collide(motion, false, FLEET_COLLISION_MARGIN, true)
+		if hit == null:
+			break
+		var normal := hit.get_normal()
+		var inward := velocity.dot(normal)
+		if inward < 0.0:
+			velocity -= normal * inward
+			if hyperjump_time >= 0.0:
+				hyperjump_time = -1.0
+				boost_button.disabled = false
+				boost_decelerating = true
+		motion = hit.get_remainder()
+		motion -= normal * minf(0.0, motion.dot(normal))
+		if motion.is_zero_approx():
+			break
+	ship_position = player_fleet_body.position.clamp(Vector2.ZERO, WORLD_SIZE)
 
 func _resolve_ship_collisions() -> void:
 	var size := _ship_size()
@@ -1814,110 +2526,96 @@ func _resolve_ship_collisions() -> void:
 			enemy.position = (enemy.position as Vector2).clamp(Vector2.ZERO, WORLD_SIZE)
 		ship_position = ship_position.clamp(Vector2.ZERO, WORLD_SIZE)
 
-func _steer_heading(direction: Vector2, max_turn_rate: float, delta: float) -> void:
-	var turn_acceleration := max_turn_rate * 3.0
-	var desired_rate := 0.0
-	var error := 0.0
-	if direction.length_squared() > 0.0001:
-		error = angle_difference(heading, direction.angle())
-		# Slow down in time to settle on the requested direction.
-		desired_rate = signf(error) * minf(max_turn_rate, sqrt(2.0 * turn_acceleration * absf(error)))
-	angular_velocity = move_toward(angular_velocity, desired_rate, turn_acceleration * delta)
-	var step := angular_velocity * delta
-	if direction.length_squared() > 0.0001 and signf(step) == signf(error) and absf(step) >= absf(error):
-		heading = direction.angle()
-		angular_velocity = 0.0
-	else:
-		heading = wrapf(heading + step, -PI, PI)
+func _turn_acceleration(max_turn_rate: float) -> float:
+	return max_turn_rate * 1.85
 
-func _update_flight_motion(direction: Vector2, target_speed: float, ship_acceleration: float, ship_turn_speed: float, ship_drag: float, boosting: bool, delta: float) -> void:
-	var engine_power := 1.0 if direction != Vector2.ZERO else 0.0
-	var turn_rate := ship_turn_speed * (0.5 if boosting else 1.0)
-	_steer_heading(direction, turn_rate, delta)
-	if direction != Vector2.ZERO:
-		var forward := Vector2.from_angle(heading)
-		if boosting:
-			# Steering adds a little thrust along the nose without erasing the boost's momentum.
-			velocity += forward * ship_acceleration * 0.12 * delta
-			velocity *= exp(-0.42 * delta)
-		else:
-			# Sideways momentum fades gradually as the main engine pushes along the nose.
-			var forward_speed := velocity.dot(forward)
-			var sideways := velocity - forward * forward_speed
-			sideways *= exp(-0.55 * delta)
-			if forward_speed < target_speed:
-				forward_speed = minf(target_speed, forward_speed + ship_acceleration * delta)
-			else:
-				forward_speed = move_toward(forward_speed, target_speed, ship_acceleration * 0.35 * delta)
-			velocity = forward * forward_speed + sideways
-			if velocity.length() > target_speed:
-				velocity = velocity.normalized() * move_toward(velocity.length(), target_speed, ship_acceleration * 0.6 * delta)
-	elif boosting:
-		velocity *= exp(-0.42 * delta)
-	else:
-		velocity *= exp(-drag * ship_drag * delta)
-	if not boosting and direction == Vector2.ZERO and velocity.length() < 0.5:
-		velocity = Vector2.ZERO
-	thrust = move_toward(thrust, engine_power, delta * 5.0)
+func _steered_rotation(angle: float, rate: float, direction: Vector2, max_turn_rate: float, delta: float) -> Vector2:
+	var turning := direction.length_squared() > 0.0001
+	var error := angle_difference(angle, direction.angle()) if turning else 0.0
+	var torque := _turn_acceleration(max_turn_rate)
+	# Match the remaining angle to the distance needed to brake the turn.
+	var desired_rate := signf(error) * minf(max_turn_rate, sqrt(2.0 * torque * absf(error)))
+	var next_rate := move_toward(rate, desired_rate, torque * delta)
+	var step := next_rate * delta
+	if turning and signf(step) == signf(error) and absf(step) >= absf(error):
+		return Vector2(direction.angle(), 0.0)
+	return Vector2(wrapf(angle + step, -PI, PI), next_rate)
+
+func _steer_heading(direction: Vector2, max_turn_rate: float, delta: float) -> void:
+	var rotation := _steered_rotation(heading, angular_velocity, direction, max_turn_rate, delta)
+	heading = rotation.x
+	angular_velocity = rotation.y
+
+func _steer_other_ship(ship: Dictionary, direction: Vector2, delta: float) -> void:
+	var rotation := _steered_rotation(ship.heading, ship.angular_velocity, direction, ship.turn_speed, delta)
+	ship.heading = rotation.x
+	ship.angular_velocity = rotation.y
 
 func _update_manual_flight(turn_input: float, accelerating: bool, braking: bool, speed_limit: float, ship_acceleration: float, ship_turn_speed: float, boosting: bool, delta: float) -> void:
-	var max_turn_rate := ship_turn_speed * (0.5 if boosting else 1.0)
-	angular_velocity = move_toward(angular_velocity, turn_input * max_turn_rate, max_turn_rate * 3.0 * delta)
+	var max_turn_rate := ship_turn_speed * (0.55 if boosting else 1.0)
+	angular_velocity = move_toward(angular_velocity, turn_input * max_turn_rate, _turn_acceleration(max_turn_rate) * delta)
 	heading = wrapf(heading + angular_velocity * delta, -PI, PI)
-	var engine_power := 0.0
+	thrust = move_toward(thrust, 1.0 if accelerating and not braking else 0.0, delta * THROTTLE_RAMP)
 	if braking:
-		velocity = velocity.move_toward(Vector2.ZERO, ship_acceleration * delta)
-	elif boosting:
-		if accelerating:
-			velocity += Vector2.from_angle(heading) * ship_acceleration * 0.12 * delta
-			engine_power = 1.0
-		velocity *= exp(-0.42 * delta)
-	elif accelerating:
+		velocity = velocity.move_toward(Vector2.ZERO, ship_acceleration * 1.25 * delta)
+		return
+	engine_throttle_target = float(accelerating and ship_acceleration > 0.0)
+	if boosting:
+		var envelope := _boost_burst_envelope()
+		engine_boost_target = envelope * lerpf(0.35, 1.0, boost_power)
+		var boost_force := ship_acceleration * lerpf(1.35, 3.6, boost_power) * envelope
+		var burst_limit := speed_limit * lerpf(1.75, 3.0, boost_power)
+		velocity = (velocity + Vector2.from_angle(heading) * boost_force * delta).limit_length(maxf(burst_limit, velocity.length()))
+		return
+	if thrust > 0.0:
 		var forward := Vector2.from_angle(heading)
 		var forward_speed := velocity.dot(forward)
-		var sideways := (velocity - forward * forward_speed) * exp(-0.55 * delta)
-		forward_speed = move_toward(forward_speed, speed_limit, ship_acceleration * delta)
-		velocity = forward * forward_speed + sideways
-		if velocity.length() > speed_limit:
-			velocity = velocity.normalized() * move_toward(velocity.length(), speed_limit, ship_acceleration * 0.6 * delta)
-		engine_power = 1.0
+		var engine_room := maxf(speed_limit - forward_speed, 0.0)
+		var forward_gain := minf(engine_room, ship_acceleration * thrust * delta)
+		# Turning changes the thrust direction and leaves the existing drift in world space.
+		velocity = (velocity + forward * forward_gain).limit_length(maxf(speed_limit, velocity.length()))
 	else:
-		# Turning alone retains momentum while the ship rotates.
-		velocity *= exp(-0.55 * delta)
-	thrust = move_toward(thrust, engine_power, delta * 5.0)
-
-func _pan_rts_camera(direction: Vector2, delta: float) -> void:
-	if direction == Vector2.ZERO or system_overview:
-		return
-	if not rts_camera_detached:
-		rts_camera_position = ship_position
-		rts_camera_detached = true
-	rts_camera_position = (rts_camera_position + direction.normalized() * RTS_CAMERA_SPEED * delta / camera_zoom).clamp(Vector2.ZERO, WORLD_SIZE)
+		velocity *= exp(-drag * delta)
+		if velocity.length_squared() < 0.25:
+			velocity = Vector2.ZERO
+	if velocity.length() > speed_limit and ship_acceleration > 0.0:
+		velocity = velocity.normalized() * move_toward(velocity.length(), speed_limit, ship_acceleration * 0.7 * delta)
 
 func _update_rts_flight(speed_limit: float, ship_acceleration: float, ship_turn_speed: float, delta: float) -> void:
 	var to_destination := rts_destination - ship_position
 	var distance := to_destination.length()
-	if distance < 4.0 and velocity.length() < 5.0:
+	if _at_flight_destination(distance, 3.0, 4.0):
 		rts_move_active = false
 		velocity = Vector2.ZERO
-		angular_velocity = 0.0
-		thrust = move_toward(thrust, 0.0, delta * 5.0)
+		_steer_heading(Vector2.ZERO, ship_turn_speed, delta)
+		thrust = move_toward(thrust, 0.0, delta * THROTTLE_RAMP)
 		return
-	_steer_heading(to_destination, minf(ship_turn_speed, RTS_MAX_TURN_RATE), delta)
+	_steer_heading(to_destination if distance > RTS_DOCKING_DISTANCE else Vector2.ZERO, ship_turn_speed, delta)
 	var forward := Vector2.from_angle(heading)
-	var alignment := smoothstep(0.0, 0.8, forward.dot(to_destination.normalized()))
-	var arrival_speed := minf(distance * 1.6, sqrt(2.0 * ship_acceleration * distance) * 0.8)
-	var desired_velocity := forward * minf(speed_limit, arrival_speed) * alignment
-	velocity = velocity.move_toward(desired_velocity, ship_acceleration * delta)
-	thrust = move_toward(thrust, alignment if arrival_speed > 5.0 else 0.0, delta * 5.0)
+	var course := to_destination.normalized()
+	var alignment := smoothstep(0.1, 0.94, forward.dot(course))
+	# Use low-speed correction thrusters for the final approach without spinning the hull.
+	var braking_acceleration := ship_acceleration * 0.55
+	var arrival_speed := minf(distance * RTS_APPROACH_RATE, sqrt(2.0 * braking_acceleration * distance) * 0.8)
+	var cruise_fraction := lerpf(1.0, alignment, smoothstep(RTS_DOCKING_DISTANCE, RTS_DOCKING_DISTANCE * 3.0, distance))
+	var desired_velocity := course * minf(speed_limit, arrival_speed) * cruise_fraction
+	var engine_demand := clampf((desired_velocity - velocity).dot(forward) / maxf(ship_acceleration * 0.5, 1.0), 0.0, 1.0) * alignment
+	var cruise_power := 0.58 * _navigation_exhaust(course, desired_velocity.length(), alignment, delta)
+	engine_throttle_target = maxf(engine_demand, cruise_power)
+	thrust = move_toward(thrust, engine_demand, delta * THROTTLE_RAMP)
+	var correction := braking_acceleration + (ship_acceleration - braking_acceleration) * thrust
+	velocity = velocity.move_toward(desired_velocity, correction * delta)
 
 func _physics_process(delta: float) -> void:
 	elapsed += delta
+	engine_throttle_target = 0.0
+	engine_boost_target = 0.0
 	if control_mode == 1:
 		var camera_input := Vector2(
 			float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
 			float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W)))
-		_pan_rts_camera(camera_input, delta)
+		if camera_input != Vector2.ZERO:
+			_pan_camera(camera_input.normalized() * RTS_CAMERA_SPEED * delta)
 		var valid_enemy: bool = selected_enemy >= 0 and selected_enemy < enemies.size() and enemies[selected_enemy].alive
 		var valid_asteroid: bool = selected_asteroid >= 0 and selected_asteroid < asteroids.size() and asteroids[selected_asteroid].iron > 0
 		if rts_attack_active and not valid_enemy and not valid_asteroid:
@@ -1935,24 +2633,23 @@ func _physics_process(delta: float) -> void:
 	var accelerating := Input.is_key_pressed(KEY_W)
 	var braking := Input.is_key_pressed(KEY_S)
 	var manual_control := control_mode == 0 and has_flight_controls and (turn_input != 0.0 or accelerating or braking)
-	var input_direction := Vector2.ZERO
 	if boost_charging:
 		boost_charge = minf(1.0, boost_charge + delta / BOOST_CHARGE_SECONDS)
 		if is_equal_approx(boost_charge, 1.0) and float(ship.speed) > 0.0:
-			var jump_direction := Vector2.from_angle(heading)
-			velocity = jump_direction * maxf(velocity.dot(jump_direction), 0.0)
-			angular_velocity = 0.0
-			_set_hyper_jump(true, jump_direction)
+			var boost_direction := Vector2.from_angle(heading)
+			_set_sustained_boost(true, boost_direction)
 			if not cached_engines.is_empty():
 				engine_audio.play_boost(1.0)
 	var boosting := boost_time > 0.0
 	if boosting:
 		boost_time = maxf(0.0, boost_time - delta)
-	var ship_acceleration := acceleration * float(ship.acceleration)
+	var acceleration_factor: float = ship.acceleration
+	var speed_factor: float = ship.speed
+	var ship_acceleration := acceleration * acceleration_factor
 	var ship_turn_speed := turn_speed * float(ship.turn)
-	var speed_limit := top_speed * float(ship.speed)
-	if hyper_jump_decelerating and velocity.length() <= speed_limit + 0.01:
-		hyper_jump_decelerating = false
+	var speed_limit := top_speed * speed_factor
+	if boost_decelerating and velocity.length() <= speed_limit + 0.01:
+		boost_decelerating = false
 	# The mining beam follows the pointer and operates while the fire button is held.
 	mining = false
 	laser_active = firing and selected_weapon == 2
@@ -1985,42 +2682,53 @@ func _physics_process(delta: float) -> void:
 				machine_gun_active = false
 				mining = false
 				mining_progress = 0.0
-	if hyper_jump_enabled and hyper_jump_direction != Vector2.ZERO:
-		var jump_velocity := hyper_jump_direction * speed_limit * HYPER_JUMP_SPEED_MULTIPLIER
-		velocity = velocity.move_toward(jump_velocity, ship_acceleration * HYPER_JUMP_SPEED_MULTIPLIER * delta)
-		_steer_heading(velocity, ship_turn_speed, delta)
+	if hyperjump_time >= 0.0:
+		_update_hyperjump(HYPERJUMP_TRAVEL_SPEED * speed_factor, HYPERJUMP_TRAVEL_ACCELERATION * acceleration_factor, ship_turn_speed, delta)
+	elif sustained_boost_enabled and boost_destination_active:
+		_update_boost_destination(BOOST_TRAVEL_SPEED * speed_factor, BOOST_TRAVEL_ACCELERATION * acceleration_factor, ship_turn_speed, delta)
+	elif sustained_boost_enabled and sustained_boost_direction != Vector2.ZERO:
+		var boost_speed := BOOST_TRAVEL_SPEED * speed_factor
+		var boost_acceleration := BOOST_TRAVEL_ACCELERATION * acceleration_factor
+		var boost_velocity := sustained_boost_direction * boost_speed
+		var movement_acceleration := _boost_acceleration(boost_speed, boost_acceleration) if boost_speed > velocity.length() else boost_acceleration
+		velocity = velocity.move_toward(boost_velocity, movement_acceleration * delta)
+		_steer_heading(sustained_boost_direction, ship_turn_speed, delta)
 		thrust = move_toward(thrust, 1.0, delta * 5.0)
-	elif hyper_jump_decelerating and not manual_control and not rts_move_active:
+		engine_boost_target = 1.0
+	elif boost_decelerating and not manual_control and not rts_move_active:
 		velocity = velocity.move_toward(velocity.normalized() * speed_limit, ship_acceleration * 2.0 * delta)
 		_steer_heading(Vector2.ZERO, ship_turn_speed, delta)
 		thrust = move_toward(thrust, 0.0, delta * 5.0)
 	elif control_mode == 1 and has_flight_controls and rts_move_active:
 		_update_rts_flight(speed_limit, ship_acceleration, ship_turn_speed, delta)
-	elif manual_control:
-		_update_manual_flight(turn_input, accelerating, braking, speed_limit, ship_acceleration, ship_turn_speed, boosting, delta)
 	else:
-		_update_flight_motion(input_direction, speed_limit, ship_acceleration, ship_turn_speed, float(ship.drag), boosting, delta)
-	var movement := velocity * delta
-	ship_position += movement
+		_update_manual_flight(turn_input if manual_control else 0.0, manual_control and accelerating, manual_control and braking, speed_limit, ship_acceleration, ship_turn_speed, boosting, delta)
 	# Keep the ship inside the large play area.
-	ship_position = ship_position.clamp(Vector2.ZERO, WORLD_SIZE)
+	_advance_player(delta)
 	if ship_position.x <= 0.0 or ship_position.x >= WORLD_SIZE.x:
 		velocity.x = 0.0
 	if ship_position.y <= 0.0 or ship_position.y >= WORLD_SIZE.y:
 		velocity.y = 0.0
-	if hyper_jump_enabled and hyper_jump_direction != Vector2.ZERO:
-		var at_edge := (ship_position.x <= 0.0 and hyper_jump_direction.x < 0.0) or (ship_position.x >= WORLD_SIZE.x and hyper_jump_direction.x > 0.0) or (ship_position.y <= 0.0 and hyper_jump_direction.y < 0.0) or (ship_position.y >= WORLD_SIZE.y and hyper_jump_direction.y > 0.0)
+	if sustained_boost_enabled and not boost_destination_active and sustained_boost_direction != Vector2.ZERO:
+		var at_edge := (ship_position.x <= 0.0 and sustained_boost_direction.x < 0.0) or (ship_position.x >= WORLD_SIZE.x and sustained_boost_direction.x > 0.0) or (ship_position.y <= 0.0 and sustained_boost_direction.y < 0.0) or (ship_position.y >= WORLD_SIZE.y and sustained_boost_direction.y > 0.0)
 		if at_edge:
-			_set_hyper_jump(false)
+			_set_sustained_boost(false)
+			engine_boost_target = 0.0
 	_update_combat(delta)
+	var position_before_contact := ship_position
 	_resolve_ship_collisions()
+	if ship_position != position_before_contact:
+		ship_motion_remainder = Vector2.ZERO
+		if fleet.size() > 1:
+			var corrected_position := ship_position
+			ship_position = position_before_contact
+			_move_player_against_fleet(corrected_position)
 	_collect_tritium(delta)
 	_update_debris(delta)
+	_update_player_exhaust(delta)
 	_update_exhaust_particles(delta)
 	if has_flight_controls and not cached_engines.is_empty():
-		var boost_fraction := _boost_exhaust_fraction()
-		var boost_audio := boost_fraction * lerpf(0.55, 1.0, boost_power)
-		engine_audio.update_mix(_player_engine_power(boost_fraction), boost_audio, _hyper_jump_active(), delta)
+		engine_audio.update_mix(engine_flame, engine_overdrive, _sustained_boost_active(), delta)
 	_queue_flight_redraw()
 
 func _draw_background(canvas: CanvasItem) -> void:
@@ -2030,9 +2738,17 @@ func _draw_background(canvas: CanvasItem) -> void:
 	for star_index in range(star_count):
 		var star: Dictionary = stars[star_index]
 		var depth: float = star.depth
-		var p: Vector2 = star.position * size
-		var alpha: float = (0.25 + depth * 0.5) * (0.85 + 0.15 * sin(elapsed * star.twinkle_speed + star.phase))
-		canvas.draw_circle(p, 0.5 + depth * 1.1, Color(0.7, 0.85, 1.0, alpha))
+		var drift := (star.position as Vector2) * size - starfield_offset * (1.0 + depth * 4.0)
+		var point := Vector2(fposmod(drift.x, size.x), fposmod(drift.y, size.y))
+		var phase: float = elapsed * star.twinkle_speed + star.phase
+		var shimmer := 0.65 * sin(phase) + 0.35 * sin(phase * 2.17 + float(star.phase))
+		var alpha: float = (0.25 + depth * 0.5) * (0.9 + star.twinkle_strength * shimmer)
+		var tint: Color = star.tint
+		var radius := 0.5 + depth * 1.1
+		if graphics_quality > 0 and depth > 0.88:
+			var glow := 0.04 + 0.09 * smoothstep(0.15, 0.95, shimmer)
+			canvas.draw_circle(point, radius + 1.3, Color(tint, glow), true, -1.0, true)
+		canvas.draw_circle(point, radius, Color(tint, alpha), true, -1.0, true)
 
 func _draw_asteroid_effects(canvas: CanvasItem) -> void:
 	_draw_hull_impacts(ASTEROID_IMPACT_INDEX, canvas)
@@ -2082,6 +2798,12 @@ func _draw() -> void:
 			draw_line(tip - direction * length * 0.33, tip, Color("f4ebff"), 2.0, true)
 		elif shot.get("kind", "") == "bullet":
 			draw_line(shot.position - direction * 12.0, shot.position, Color("ffd078"), 2.5, true)
+		elif shot.get("kind", "") == MODULES.CRUISER_MACHINE_LASER:
+			var tip: Vector2 = shot.position
+			var tail := tip - direction * minf(tip.distance_to(shot.muzzle), 32.0)
+			draw_line(tail, tip, Color(CRUISER_LASER_COLOR, 0.28), 8.0, true)
+			draw_line(tail, tip, CRUISER_LASER_COLOR, 3.5, true)
+			draw_line(tail.lerp(tip, 0.43), tip, Color("e7fff6"), 1.5, true)
 		else:
 			var color := Color("8af4ff") if shot.friendly else Color("ff7562")
 			draw_line(shot.position - direction * 16.0, shot.position, color, 4.0, true)
@@ -2120,14 +2842,17 @@ func _draw() -> void:
 			var particle_position := center + direction * (8.0 + progress * 28.0)
 			draw_circle(particle_position, 2.5 * alpha, Color(0.94, 0.8, 1.0, alpha))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	if system_overview and overview_system < 0:
+	if camera_zoom < MAP_LABEL_ZOOM:
 		_draw_sector_labels(camera)
+	var ship_screen := camera * ship_position
 	_draw_hud(size)
 	_draw_aim_indicators(size)
-	var ship_screen := camera * ship_position
-	if system_overview and not rts_selected:
-		draw_arc(ship_screen, 6.0, 0.0, TAU, 20, Color("e0f9ff"), 1.0, true)
-	if control_mode == 1:
+	var marker_alpha := 1.0 - smoothstep(7.0, 16.0, _ship_size().y * camera_zoom)
+	if marker_alpha > 0.0 and visible_world.has_point(ship_position):
+		var forward := Vector2.from_angle(heading)
+		var side := forward.orthogonal()
+		draw_colored_polygon(PackedVector2Array([ship_screen + forward * 7.0, ship_screen - forward * 5.0 + side * 4.0, ship_screen - forward * 5.0 - side * 4.0]), Color(Color("e0f9ff"), marker_alpha))
+	if control_mode == 1 and hyperjump_time < 0.0:
 		if rts_selected:
 			draw_arc(ship_screen, maxf(_ship_size().length() * 0.5 * camera_zoom, 12.0) + 5.0, 0.0, TAU, 48, Color(0.65, 0.82, 0.76, 0.42), 1.25, true)
 		if rts_move_active:
@@ -2141,19 +2866,21 @@ func _draw() -> void:
 		_draw_radial_menu()
 
 func _draw_radial_menu() -> void:
-	var hovered := get_viewport().get_mouse_position().distance_to(radial_menu_position)
-	var highlighted := hovered >= 18.0 and hovered <= RADIAL_MENU_RADIUS
+	var mouse_offset := get_viewport().get_mouse_position() - radial_menu_position
+	var highlighted := mouse_offset.length() >= 18.0 and mouse_offset.length() <= RADIAL_MENU_RADIUS
 	draw_circle(radial_menu_position, RADIAL_MENU_RADIUS, Color(0.025, 0.055, 0.09, 0.96), true, -1.0, true)
 	draw_arc(radial_menu_position, RADIAL_MENU_RADIUS, 0.0, TAU, 64, Color("7196a7"), 1.5, true)
 	if highlighted:
-		draw_arc(radial_menu_position, 50.0, 0.0, TAU, 64, Color(0.36, 0.73, 0.86, 0.28), 38.0, true)
+		var start_angle := PI if mouse_offset.y < 0.0 else 0.0
+		draw_arc(radial_menu_position, 45.0, start_angle, start_angle + PI, 32, Color(0.36, 0.73, 0.86, 0.28), 52.0, true)
+	draw_line(radial_menu_position + Vector2(-RADIAL_MENU_RADIUS, 0), radial_menu_position + Vector2(RADIAL_MENU_RADIUS, 0), Color("507383"), 1.0, true)
 	draw_circle(radial_menu_position, 18.0, Color("102434"), true, -1.0, true)
 	draw_arc(radial_menu_position, 18.0, 0.0, TAU, 32, Color("507383"), 1.0, true)
 	var font := ThemeDB.fallback_font
 	draw_string(font, radial_menu_position + Vector2(-8, 5), "×", HORIZONTAL_ALIGNMENT_CENTER, 16.0, 16, Color("9ab3bf"))
-	var label := "EXIT JUMP" if hyper_jump_enabled else "HYPERJUMP"
+	var label := "EXIT BOOST" if sustained_boost_enabled else "BOOST"
 	draw_string(font, radial_menu_position + Vector2(-60, -35), label, HORIZONTAL_ALIGNMENT_CENTER, 120.0, 12, Color("dcf4ff"))
-	draw_string(font, radial_menu_position + Vector2(-60, 48), "CLICK TO SELECT", HORIZONTAL_ALIGNMENT_CENTER, 120.0, 9, Color("91b5c4"))
+	draw_string(font, radial_menu_position + Vector2(-65, 47), "RIGHT-CLICK A SYSTEM", HORIZONTAL_ALIGNMENT_CENTER, 130.0, 10, Color("91aebe"))
 
 func _draw_rocket(shot: Dictionary) -> void:
 	var center: Vector2 = shot.position
@@ -2198,20 +2925,20 @@ func _draw_rocket_effects(visible_world: Rect2) -> void:
 		draw_circle(position, 8.0 * fade, Color(1.0, 0.88, 0.63, fade), true, -1.0, true)
 
 func _draw_aim_indicators(size: Vector2) -> void:
-	if system_overview or (control_mode == 1 and not rts_attack_active):
+	if camera_zoom < MAP_LABEL_ZOOM or hyperjump_time >= 0.0 or (control_mode == 1 and not rts_attack_active):
 		return
-	if is_instance_valid(settings_layer) or is_instance_valid(builder_layer) or get_viewport().gui_get_hovered_control() != null:
+	if is_instance_valid(settings_layer) or is_instance_valid(hangar_layer) or get_viewport().gui_get_hovered_control() != null:
 		return
 	var pointer := get_viewport().get_mouse_position()
 	if not Rect2(Vector2.ZERO, size).has_point(pointer):
 		return
 	var aim_position := _aim_world_position()
 	var weapon: Dictionary = WEAPON_SLOTS[selected_weapon - 1]
-	var color: Color = weapon.color
-	for part in custom_parts:
-		var turret: String = part.get("turret", "")
+	for part in cached_turret_mounts:
+		var turret: String = part.turret
 		if turret not in weapon.turrets:
 			continue
+		var color: Color = CRUISER_LASER_COLOR if turret == MODULES.CRUISER_MACHINE_LASER else weapon.color
 		var origin := _turret_world_position(part)
 		var direction := Vector2.from_angle(_turret_angle(part))
 		var distance := origin.distance_to(aim_position)
@@ -2239,16 +2966,40 @@ func _draw_mining_beams() -> void:
 
 func _turret_world_position(part: Dictionary) -> Vector2:
 	_ensure_ship_cache()
-	return ship_position + (Vector2(part.x, part.y) * MODULES.CELL - cached_ship_bounds.get_center()).rotated(heading + PI / 2.0)
+	return ship_position + _turret_local_position(part).rotated(heading + PI / 2.0)
 
-func _boost_exhaust_fraction() -> float:
-	return boost_time / boost_duration if boost_time > 0.0 and boost_duration > 0.0 else 0.0
+func _turret_local_position(part: Dictionary) -> Vector2:
+	if part.has("local_position"):
+		return part.local_position
+	return Vector2(part.x, part.y) * MODULES.CELL - cached_ship_bounds.get_center()
 
-func _hyper_jump_active() -> bool:
-	return hyper_jump_enabled and hyper_jump_direction != Vector2.ZERO
+func _boost_burst_envelope() -> float:
+	if boost_time <= 0.0 or boost_duration <= 0.0:
+		return 0.0
+	var progress := 1.0 - boost_time / boost_duration
+	return smoothstep(0.0, 0.24, progress) * (1.0 - smoothstep(0.68, 1.0, progress))
 
-func _player_engine_power(boost: float) -> float:
-	return maxf(thrust, 0.85 * minf(boost * 5.0, 1.0))
+func _navigation_exhaust(course: Vector2, target_speed: float, alignment: float, delta: float) -> float:
+	# Maintain a cruise flame at constant speed. Braking and lateral corrections
+	# belong to the maneuvering thrusters and do not drive the aft bell.
+	var braking_demand := (velocity.dot(course) - target_speed) / delta
+	return alignment * smoothstep(8.0, 65.0, target_speed) * (1.0 - smoothstep(8.0, 80.0, braking_demand))
+
+func _reset_player_exhaust() -> void:
+	engine_throttle_target = 0.0
+	engine_boost_target = 0.0
+	engine_flame = 0.0
+	engine_overdrive = 0.0
+
+func _update_player_exhaust(delta: float) -> void:
+	var flame_target := maxf(engine_throttle_target, engine_boost_target)
+	var flame_rate := ENGINE_IGNITION_RATE if flame_target > engine_flame else ENGINE_FADE_RATE
+	var boost_rate := ENGINE_IGNITION_RATE if engine_boost_target > engine_overdrive else ENGINE_FADE_RATE
+	engine_flame = move_toward(engine_flame, flame_target, flame_rate * delta)
+	engine_overdrive = move_toward(engine_overdrive, engine_boost_target, boost_rate * delta)
+
+func _sustained_boost_active() -> bool:
+	return (sustained_boost_enabled and sustained_boost_direction != Vector2.ZERO) or (hyperjump_time >= 0.0 and thrust > 0.1)
 
 func _enemy_engine_power(enemy: Dictionary) -> float:
 	return clampf((enemy.velocity as Vector2).length() / maxf(float(enemy.speed), 1.0), 0.2, 1.0)
@@ -2260,22 +3011,21 @@ func _update_exhaust_particles(delta: float) -> void:
 			exhaust_particles[remaining] = particle
 			remaining += 1
 	exhaust_particles.resize(remaining)
-	var boost := _boost_exhaust_fraction()
-	_update_engine_trails(cached_engines, Transform2D(heading + PI / 2.0, ship_position), velocity, _player_engine_power(boost), _hyper_jump_active())
+	var player_pose := Transform2D(heading + PI / 2.0, ship_position)
+	_update_engine_trails(cached_engines, player_pose, velocity, engine_flame, _sustained_boost_active())
 	for enemy in enemies:
 		_update_engine_trails(enemy.engines, Transform2D(float(enemy.heading) + PI / 2.0, enemy.position),
 			enemy.velocity, _enemy_engine_power(enemy) if enemy.alive else 0.0)
 	if camera_zoom < EXHAUST_PARTICLE_MIN_ZOOM:
 		return
 	var visible_world := _visible_world(_world_transform())
-	_emit_exhaust_particles(cached_engines, Transform2D(heading + PI / 2.0, ship_position),
-		velocity, _player_engine_power(boost), maxf(boost * lerpf(0.35, 1.0, boost_power), 1.0 if _hyper_jump_active() else 0.0), delta, visible_world)
+	_emit_exhaust_particles(cached_engines, player_pose, velocity, engine_flame, engine_overdrive, delta, visible_world)
 	for enemy in enemies:
 		if enemy.alive:
 			_emit_exhaust_particles(enemy.engines, Transform2D(float(enemy.heading) + PI / 2.0, enemy.position),
 				enemy.velocity, _enemy_engine_power(enemy), 0.0, delta, visible_world)
 
-func _update_engine_trails(engines: Array[Dictionary], pose: Transform2D, ship_velocity: Vector2, power: float, hyper_jump: bool = false) -> void:
+func _update_engine_trails(engines: Array[Dictionary], pose: Transform2D, ship_velocity: Vector2, power: float, sustained_boost: bool = false) -> void:
 	for engine in engines:
 		var trail: Array = engine.get("trail", [])
 		while not trail.is_empty() and elapsed - float(trail[0].time) >= float(trail[0].get("lifetime", ENGINE_TRAIL_LIFETIME)):
@@ -2285,32 +3035,39 @@ func _update_engine_trails(engines: Array[Dictionary], pose: Transform2D, ship_v
 			var position: Vector2 = (pose * engine.nozzle) * Vector2(0.0, 8.0)
 			engine.trail_head = position
 			engine.trail_power = power
-			if not bool(engine.get("trail_active", false)) or (not trail.is_empty() and position.distance_to(trail[-1].position) > maxf(500.0, ship_velocity.length() * 0.3)):
-				trail.clear()
-			if trail.is_empty() or elapsed - float(trail[-1].time) >= ENGINE_TRAIL_INTERVAL:
-				trail.append({"position": position, "time": elapsed, "power": power, "lifetime": HYPER_TRAIL_LIFETIME if hyper_jump else ENGINE_TRAIL_LIFETIME})
+			var fresh_segment := not bool(engine.get("trail_active", false)) or (not trail.is_empty() and position.distance_to(trail[-1].position) > maxf(500.0, ship_velocity.length() * 0.3))
+			if fresh_segment or trail.is_empty() or elapsed - float(trail[-1].time) >= ENGINE_TRAIL_INTERVAL - 0.00001:
+				trail.append({
+					"position": position, "time": elapsed, "power": power, "break_before": fresh_segment,
+					"lifetime": BOOST_TRAIL_LIFETIME if sustained_boost else ENGINE_TRAIL_LIFETIME,
+				})
 		engine.trail = trail
 		engine.trail_active = active
 
 func _draw_engine_trails(canvas: CanvasItem, engines: Array[Dictionary]) -> void:
 	for engine in engines:
 		var trail: Array = engine.get("trail", [])
+		var half_width: float = maxf(clampf(float(engine.size.x), 0.7, 2.0), minf(0.5 / camera_zoom, 4.0))
 		var points := PackedVector2Array()
 		var colors := PackedColorArray()
 		for sample in trail:
+			if sample.break_before:
+				if points.size() >= 2:
+					canvas.draw_polyline_colors(points, colors, half_width * 2.0, true)
+				points.clear()
+				colors.clear()
 			var point: Vector2 = sample.position
 			if not points.is_empty() and points[-1].distance_squared_to(point) < 0.01:
 				continue
 			var fade := pow(clampf(1.0 - (elapsed - float(sample.time)) / float(sample.get("lifetime", ENGINE_TRAIL_LIFETIME)), 0.0, 1.0), 1.5) * float(sample.power)
 			points.append(point)
-			colors.append(Color(1.0, 0.78, 0.62, 0.34 * fade))
+			colors.append(Color(1.0, 0.55, 0.22, 0.42 * fade))
 		if bool(engine.get("trail_active", false)) and not points.is_empty():
 			var head: Vector2 = engine.trail_head
 			if points[-1].distance_squared_to(head) >= 0.01:
 				points.append(head)
-				colors.append(Color(1.0, 0.78, 0.62, 0.34 * float(engine.trail_power)))
+				colors.append(Color(1.0, 0.55, 0.22, 0.42 * float(engine.trail_power)))
 		if points.size() >= 2:
-			var half_width: float = maxf(clampf(float(engine.size.x), 0.7, 2.0), minf(0.5 / camera_zoom, 4.0))
 			canvas.draw_polyline_colors(points, colors, half_width * 2.0, true)
 
 func _emit_exhaust_particles(engines: Array[Dictionary], pose: Transform2D, ship_velocity: Vector2, power: float, boost: float, delta: float, visible_world: Rect2) -> void:
@@ -2373,30 +3130,42 @@ func _draw_exhaust_particles(canvas: CanvasItem) -> void:
 			var radius := Vector2.ONE * particle.radius * lerpf(1.0, 3.6, progress)
 			canvas.draw_texture_rect(engine_light_texture, Rect2(position - radius, radius * 2.0), false, color)
 
-func _draw_engine_exhaust(canvas: CanvasItem) -> void:
-	var boost_remaining := _boost_exhaust_fraction()
-	var flame := _player_engine_power(boost_remaining)
-	if flame <= 0.01 and not boost_charging:
+func _draw_engine_flare(canvas: CanvasItem, engine: Dictionary, power: float, phase: float, boost: float = 0.0) -> void:
+	if power <= 0.01:
 		return
+	var size: Vector2 = engine.size
+	var intensity := minf(power * 2.0, 1.0)
+	var flicker := 0.94 + 0.08 * sin(elapsed * 27.0 + phase) + 0.04 * sin(elapsed * 49.0 + phase * 1.7)
+	var width := (7.0 + 3.0 * power) * size.x * (1.0 + boost * 0.25)
+	var length := (32.0 + 26.0 * power) * size.y * (1.0 + boost * 1.5) * flicker
+	var center := Vector2(0.0, width * 0.45)
+	canvas.draw_set_transform_matrix(engine.nozzle)
+	# A broad, soft halo and fine rays frame the white-hot engine core.
+	var halo := Vector2(width * 4.5, width * 4.5)
+	canvas.draw_texture_rect(engine_light_texture, Rect2(center - halo, halo * 2.0), false, Color(1.0, 0.66, 0.31, 0.42 * intensity))
+	var ray_length := width * 5.5 * flicker
+	canvas.draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-ray_length, 0), center + Vector2(0, -width * 0.22),
+		center + Vector2(ray_length, 0), center + Vector2(0, width * 0.22),
+	]), Color(1.0, 0.82, 0.55, 0.20 * intensity))
+	canvas.draw_colored_polygon(PackedVector2Array([
+		Vector2(-width * 0.8, 0), Vector2(-width * 0.45, length * 0.26),
+		Vector2(0, length), Vector2(width * 0.45, length * 0.26), Vector2(width * 0.8, 0),
+	]), Color(1.0, 0.49, 0.15, 0.32 * intensity))
+	var core_glow := Vector2(width * 1.7, width * 1.7)
+	canvas.draw_texture_rect(engine_light_texture, Rect2(center - core_glow, core_glow * 2.0), false, Color(1.0, 0.91, 0.68, 0.9 * intensity))
+	canvas.draw_colored_polygon(PackedVector2Array([
+		Vector2(-width * 0.55, 0), Vector2(-width * 0.4, width * 1.1),
+		Vector2(0, length * 0.38), Vector2(width * 0.4, width * 1.1), Vector2(width * 0.55, 0),
+	]), Color(1.0, 0.98, 0.87, intensity))
+
+func _draw_engine_exhaust(canvas: CanvasItem) -> void:
 	for index in range(cached_engines.size()):
 		var engine: Dictionary = cached_engines[index]
-		var nozzle: Transform2D = engine.nozzle
-		canvas.draw_set_transform_matrix(nozzle)
 		if boost_charging:
+			canvas.draw_set_transform_matrix(engine.nozzle)
 			canvas.draw_circle(Vector2.ZERO, 5.0 + boost_charge * 8.0, Color(1.0, 0.59, 0.27, 0.12 + 0.18 * boost_charge))
-		if flame > 0.01:
-			var jump_flare := _hyper_jump_active()
-			var flicker := (0.82 + 0.18 * sin(elapsed * 42.0 + float(index) * 2.7)) if jump_flare else (0.92 + 0.08 * sin(elapsed * 27.0 + float(index) * 2.7))
-			var length := (24.0 + 30.0 * flame) * flicker * (1.0 + boost_remaining * lerpf(0.35, 1.0, boost_power)) * float(engine.size.y) * (2.8 if jump_flare else 1.0)
-			var width := (5.0 + 3.0 * flame) * float(engine.size.x) * (1.35 if jump_flare else 1.0)
-			var opacity := minf(flame * 2.0, 1.0)
-			var rim := Color(1.0, 0.29, 0.07, 0.55 * opacity)
-			canvas.draw_polygon(PackedVector2Array([
-				Vector2(-width, 0), Vector2(-width * 0.8, length * 0.35), Vector2(0, length),
-				Vector2(width * 0.8, length * 0.35), Vector2(width, 0),
-			]), PackedColorArray([rim, rim, Color(rim, 0.0), rim, rim]))
-			canvas.draw_colored_polygon(PackedVector2Array([Vector2(-width * 0.7, 0), Vector2(-width * 0.45, length * 0.42), Vector2(0, length * 0.83), Vector2(width * 0.45, length * 0.42), Vector2(width * 0.7, 0)]), Color(1.0, 0.65, 0.24, 0.85 * opacity))
-			canvas.draw_colored_polygon(PackedVector2Array([Vector2(-width * 0.38, 0), Vector2(0, length * 0.48), Vector2(width * 0.38, 0)]), Color(1.0, 0.94, 0.74, opacity))
+		_draw_engine_flare(canvas, engine, engine_flame, float(index) * 2.7, engine_overdrive)
 
 func _draw_machine_gun_flash(canvas: CanvasItem, center: Vector2, turret_angle: float, scale_factor: float, shot: Dictionary, is_long: bool, is_retro: bool = false) -> void:
 	if shot.is_empty():
@@ -2411,6 +3180,21 @@ func _draw_machine_gun_flash(canvas: CanvasItem, center: Vector2, turret_angle: 
 	var shoulders := muzzle + forward * 3.0
 	canvas.draw_colored_polygon(PackedVector2Array([muzzle, shoulders + side * 3.0, tip, shoulders - side * 3.0]), Color(1.0, 0.57, 0.23, strength))
 	canvas.draw_colored_polygon(PackedVector2Array([muzzle, shoulders + side * 1.3, muzzle.lerp(tip, 0.65), shoulders - side * 1.3]), Color(1.0, 0.96, 0.75, strength))
+
+func _cruiser_barrel_recoil(shot: Dictionary) -> float:
+	var age := elapsed - float(shot.get("fired_at", -INF))
+	return CRUISER_BARREL_RECOIL_DISTANCE * (1.0 - smoothstep(0.0, CRUISER_BARREL_RECOIL_DURATION, age))
+
+func _draw_cruiser_laser_flash(canvas: CanvasItem, mount: Dictionary, turret_angle: float, shot: Dictionary) -> void:
+	var age := elapsed - float(shot.fired_at)
+	var strength := 1.0 - smoothstep(0.0, MACHINE_GUN_FLASH_DURATION, age)
+	if strength <= 0.0:
+		return
+	var muzzle := _turret_local_position(mount) + MODULES.cruiser_laser_muzzle_offset(mount, shot.barrel, turret_angle, _cruiser_barrel_recoil(shot))
+	var forward := Vector2.UP.rotated(turret_angle)
+	canvas.draw_circle(muzzle, 10.0 * strength, Color(CRUISER_LASER_COLOR, strength * 0.35), true, -1.0, true)
+	canvas.draw_line(muzzle, muzzle + forward * (7.0 + 12.0 * strength), Color(CRUISER_LASER_COLOR, strength), 4.0, true)
+	canvas.draw_circle(muzzle, 3.0 * strength, Color(0.89, 1.0, 0.96, strength))
 
 func _rocket_recoil(age: float) -> float:
 	var kick := 1.0 - smoothstep(0.0, ROCKET_RECOIL_DURATION, age)
@@ -2432,12 +3216,7 @@ func _draw_rocket_launch(canvas: CanvasItem, center: Vector2, turret_angle: floa
 
 func _draw_enemy_exhaust(canvas: CanvasItem, enemy: Dictionary) -> void:
 	for engine in enemy.engines:
-		canvas.draw_set_transform_matrix(engine.nozzle)
-		var flame_length := 16.0 + 3.0 * sin(elapsed * 23.0 + float(engine.phase))
-		var width: float = 5.0 * engine.size.x
-		canvas.draw_colored_polygon(PackedVector2Array([
-			Vector2(-width, 0), Vector2(0, flame_length), Vector2(width, 0),
-		]), Color(1.0, 0.32, 0.13, 0.8))
+		_draw_engine_flare(canvas, engine, _enemy_engine_power(enemy), float(engine.phase))
 
 func _draw_enemy_hull(canvas: CanvasItem, enemy: Dictionary, index: int) -> void:
 	for module in enemy.exterior:
@@ -2481,7 +3260,7 @@ func _draw_custom_ship(canvas: CanvasItem) -> void:
 		if not MODULES.is_exterior_structure(part):
 			continue
 		var position := Vector2(part.x, part.y) * MODULES.CELL - center
-		MODULES.draw_part(canvas, part, position)
+		MODULES.draw_part(canvas, part, position, 1.0, 1.0, Color.WHITE, 1.0, true)
 		if cached_armour_borders.has(index):
 			MODULES.draw_armour_border(canvas, cached_armour_borders[index], -center)
 		_draw_part_shield_glow(canvas, part, position, cached_ship_bounds.size, 1.0, -1)
@@ -2497,15 +3276,19 @@ func _draw_custom_ship(canvas: CanvasItem) -> void:
 func _draw_player_details(canvas: CanvasItem) -> void:
 	var center := cached_ship_bounds.get_center()
 	for detail in custom_parts:
+		if detail.type == "preset_light_gunship":
+			MODULES.draw_light_gunship_beacon(canvas, detail, Vector2(detail.x, detail.y) * MODULES.CELL - center, MODULES.navigation_light_brightness(elapsed))
 		if MODULES.is_decoration(detail):
 			var brightness := MODULES.navigation_light_brightness(elapsed) if detail.type == "navigation_lights" else 1.0
 			MODULES.draw_part(canvas, detail, Vector2(detail.x, detail.y) * MODULES.CELL - center, 1.0, 1.0, Color.WHITE, brightness)
-	for part in custom_parts:
-		if not part.has("turret"):
-			continue
+	for part in cached_turret_mounts:
 		var key := _turret_key(part)
-		var position := Vector2(key) * MODULES.CELL - center
+		var position := _turret_local_position(part)
 		var turret_angle := _turret_angle(part) - heading
+		if part.turret == MODULES.CRUISER_MACHINE_LASER:
+			var shot: Dictionary = player_machine_gun_shots.get(key, {})
+			MODULES.draw_cruiser_turret(canvas, part, turret_angle, int(shot.get("barrel", -1)), _cruiser_barrel_recoil(shot))
+			continue
 		var recoil := _rocket_recoil(elapsed - float(player_rocket_launches.get(key, -INF)))
 		MODULES.draw_mounted_turret(canvas, part.turret, position, 1.0, 1.0, Color.WHITE, turret_angle, recoil)
 		_draw_part_shield_glow(canvas, part, position, cached_ship_bounds.size, 1.0, -1, true, turret_angle, recoil)
@@ -2527,19 +3310,46 @@ func _draw_part_shield_glow(canvas: CanvasItem, part: Dictionary, position: Vect
 			if mounted_turret:
 				MODULES.draw_mounted_turret(canvas, part.turret, position, part_scale, strength, tint, turret_angle, recoil)
 			else:
-				MODULES.draw_part(canvas, part, position, part_scale, strength, tint)
+				MODULES.draw_part(canvas, part, position, part_scale, strength, tint, 1.0, enemy_index == -1)
+
+func _draw_hyperjump_bow(canvas: CanvasItem) -> void:
+	var jump_speed := HYPERJUMP_TRAVEL_SPEED * float(_current_ship().speed)
+	var intensity := smoothstep(0.03, 0.55, velocity.length() / maxf(jump_speed, 1.0))
+	if intensity <= 0.001:
+		return
+	var half_width := maxf(12.0, cached_ship_bounds.size.x * 0.5)
+	var nose_y := -cached_ship_bounds.size.y * 0.5
+	var flicker := 0.85 + 0.15 * sin(elapsed * 17.0)
+	var tip := Vector2(0.0, nose_y - 3.0)
+	for layer in range(4, 0, -1):
+		var radius := half_width * (0.25 + float(layer) * 0.17)
+		canvas.draw_circle(tip, radius, Color(1.0, 0.29 + 0.08 * (4 - layer), 0.08, 0.045 * intensity * flicker), true, -1.0, true)
+	for wave in range(3):
+		var phase := fposmod(elapsed * 0.85 + float(wave) / 3.0, 1.0)
+		var width := half_width * (0.55 + 0.45 * phase)
+		var reach := half_width * (0.24 + 0.65 * phase)
+		var points := PackedVector2Array()
+		for segment in range(25):
+			var x := float(segment) / 12.0 - 1.0
+			points.append(Vector2(x * width, nose_y + half_width * 0.12 - reach * (1.0 - x * x)))
+		var opacity := intensity * (1.0 - phase) * flicker
+		canvas.draw_polyline(points, Color(1.0, 0.28, 0.07, opacity * 0.25), 6.0, true)
+		canvas.draw_polyline(points, Color(1.0, 0.75, 0.38, opacity * 0.8), 1.5, true)
 
 func _draw_player_effects(canvas: CanvasItem) -> void:
+	if hyperjump_time >= 0.0:
+		_draw_hyperjump_bow(canvas)
 	if not player_machine_gun_shots.is_empty() or not player_rocket_launches.is_empty():
-		var center := cached_ship_bounds.get_center()
-		for part in custom_parts:
-			if not part.has("turret"):
-				continue
+		for part in cached_turret_mounts:
 			var key := _turret_key(part)
-			var position := Vector2(key) * MODULES.CELL - center
+			var position := _turret_local_position(part)
 			var turret_angle := _turret_angle(part) - heading
 			if player_machine_gun_shots.has(key):
-				_draw_machine_gun_flash(canvas, position, turret_angle, 1.0, player_machine_gun_shots[key], part.turret == "long_machine_gun", part.turret == "retro_machine_gun")
+				var shot: Dictionary = player_machine_gun_shots[key]
+				if part.turret == MODULES.CRUISER_MACHINE_LASER:
+					_draw_cruiser_laser_flash(canvas, part, turret_angle, shot)
+				else:
+					_draw_machine_gun_flash(canvas, position, turret_angle, 1.0, shot, part.turret == "long_machine_gun", part.turret == "retro_machine_gun")
 			if player_rocket_launches.has(key):
 				_draw_rocket_launch(canvas, position, turret_angle, 1.0, elapsed - float(player_rocket_launches[key]))
 	_draw_shield_impacts(-1, cached_ship_bounds.size, canvas)
@@ -2547,12 +3357,21 @@ func _draw_player_effects(canvas: CanvasItem) -> void:
 
 func _draw_sector_labels(camera: Transform2D) -> void:
 	var font := ThemeDB.fallback_font
+	var viewport := get_viewport_rect()
+	var opacity := 1.0 - smoothstep(MAP_LABEL_ZOOM * 0.5, MAP_LABEL_ZOOM, camera_zoom)
 	for system: Dictionary in SOLAR_SYSTEM.SYSTEMS:
 		var center := camera * (system.center as Vector2)
 		var radius := maxf(6.0, system.radius * camera_zoom)
-		var label := "AZURE  /  BLUE DWARF" if system.kind == SOLAR_SYSTEM.BodyKind.BLUE_DWARF else "SOL"
-		draw_line(center + Vector2(0, radius + 5.0), center + Vector2(0, radius + 20.0), system.color.darkened(0.35), 1.0, true)
-		draw_string(font, center + Vector2(-90.0, radius + 36.0), label, HORIZONTAL_ALIGNMENT_CENTER, 180.0, 14, system.color)
+		if not viewport.grow(radius + 40.0).has_point(center):
+			continue
+		var label := str(system.name).to_upper()
+		if system.kind == SOLAR_SYSTEM.BodyKind.BLUE_DWARF:
+			label += "  /  BLUE DWARF"
+		var label_color := Color(system.color, opacity)
+		if system.radius * camera_zoom < 6.0:
+			draw_circle(center, 3.0, label_color, true, -1.0, true)
+		draw_line(center + Vector2(0, radius + 5.0), center + Vector2(0, radius + 20.0), label_color.darkened(0.35), 1.0, true)
+		draw_string(font, center + Vector2(-90.0, radius + 36.0), label, HORIZONTAL_ALIGNMENT_CENTER, 180.0, 14, label_color)
 
 func _draw_hud(size: Vector2) -> void:
 	var font := ThemeDB.fallback_font
@@ -2569,16 +3388,22 @@ func _draw_hud(size: Vector2) -> void:
 		draw_line(Vector2(map_rect.position.x, y), Vector2(map_rect.end.x, y), Color(0.3, 0.55, 0.65, 0.2))
 	draw_rect(map_rect, Color(0.35, 0.65, 0.75, 0.6), false, 1.0)
 	var nearby_system := solar_system.nearest_system(ship_position)
-	var chart_bounds := overview_bounds if system_overview else solar_system.local_chart_at(ship_position, nearby_system)
-	var chart_system := -1 if chart_bounds == SOLAR_SYSTEM.WORLD_BOUNDS else (overview_system if system_overview else nearby_system)
+	var chart_bounds := SOLAR_SYSTEM.WORLD_BOUNDS
 	var chart_scale := _fit_chart(map_rect.size, chart_bounds) * 0.87
 	var chart := Transform2D(0.0, Vector2.ONE * chart_scale, 0.0, map_rect.get_center() - chart_bounds.get_center() * chart_scale)
-	solar_system.draw_minimap(self, chart, chart_system)
-	var chart_name := "SECTOR CHART" if chart_system < 0 else "%s SYSTEM" % SOLAR_SYSTEM.SYSTEMS[chart_system].name.to_upper()
-	var chart_color: Color = Color("a6cbdc") if chart_system < 0 else SOLAR_SYSTEM.SYSTEMS[chart_system].color
-	draw_string(font, Vector2(30, 221), chart_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, chart_color)
-	var map_hint := "M  ·  SYSTEM     G  ·  SECTOR" if not system_overview else "M  ·  SYSTEM     G  ·  SECTOR     SCROLL  ·  EXIT"
-	draw_string(font, Vector2(30, 241), map_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a6cbdc"))
+	solar_system.draw_minimap(self, chart)
+	for i in range(fleet.size()):
+		if i != active_fleet_index and chart_bounds.has_point(fleet[i].position):
+			draw_circle(chart * fleet[i].position, 3.0, Color("87e5bf"))
+	var view_size := size / camera_zoom
+	var camera_view := Rect2(_camera_center() - view_size * 0.5, view_size).intersection(chart_bounds)
+	if camera_view.has_area():
+		var view_marker_size := (camera_view.size * chart_scale).max(Vector2.ONE * 4.0)
+		draw_rect(Rect2(chart * camera_view.get_center() - view_marker_size * 0.5, view_marker_size), Color(0.48, 0.78, 0.91, 0.7), false, 1.0)
+	var map_hint := "SCROLL ZOOM  ·  SHIFT-DRAG PAN  ·  F CENTER SHIP"
+	if hyperjump_time < 0.0:
+		draw_string(font, Vector2(30, 221), map_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a6cbdc"))
+	draw_string(font, Vector2(30, 241), "ZOOM OUT AND RIGHT-CLICK A SYSTEM TO JUMP", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a6cbdc"))
 	var neutral_count := 0
 	var hostile_count := 0
 	for i in range(enemies.size()):
@@ -2596,27 +3421,39 @@ func _draw_hud(size: Vector2) -> void:
 	if enemy_wave_timer >= 0.0:
 		wave_status = "NEXT WAVE IN %d" % int(ceil(enemy_wave_timer))
 	draw_string(font, Vector2(size.x / 2.0 - 110.0, 67.0), wave_status, HORIZONTAL_ALIGNMENT_CENTER, 220.0, 11, Color("91aebe"))
+	if hyperjump_time >= 0.0 or elapsed < hyperjump_arrival_until:
+		var navigation_text := "Arrived in %s" % SOLAR_SYSTEM.SYSTEMS[nearby_system].name
+		if hyperjump_time >= 0.0:
+			navigation_text = "Hyperjump to %s" % SOLAR_SYSTEM.SYSTEMS[hyperjump_destination].name
+		var navigation_position := Vector2(size.x * 0.5 - 170.0, 92.0)
+		draw_rect(Rect2(navigation_position, Vector2(340.0, 38.0)), Color("102434"))
+		draw_string(font, navigation_position + Vector2(0.0, 25.0), navigation_text, HORIZONTAL_ALIGNMENT_CENTER, 340.0, 16, HYPERJUMP_COLOR)
 	if chart_bounds.has_point(ship_position):
 		var player_on_map := chart * ship_position
+		if hyperjump_time >= 0.0:
+			draw_dashed_line(player_on_map, chart * hyperjump_arrival, Color(HYPERJUMP_COLOR, 0.55), 1.0, 4.0)
 		var forward := Vector2.from_angle(heading)
 		var side := forward.orthogonal()
 		draw_colored_polygon(PackedVector2Array([player_on_map + forward * 7.0, player_on_map - forward * 5.0 + side * 4.0, player_on_map - forward * 5.0 - side * 4.0]), Color("e0f9ff"))
 	var controls_text := "WASD FLY  ·  1 LASER  3 GUN  4 ROCKET  5 RAILGUN  ·  LEFT CLICK FIRE  ·  RIGHT CLICK / TAB TARGET  ·  SPACE BOOST  ·  MIDDLE CLICK COMMANDS"
 	if control_mode == 1:
 		controls_text = "WASD PAN CAMERA  ·  SPACE RECENTER  ·  SELECT SHIP, CLICK TO MOVE OR ATTACK  ·  1 LASER  3 GUN  4 ROCKET  5 RAILGUN  ·  MIDDLE CLICK COMMANDS"
-	if hyper_jump_enabled:
-		controls_text = "HYPER JUMP  ·  CLICK TO STEER  ·  MIDDLE CLICK FOR COMMANDS"
-		controls_text += "  ·  SPACE TO EXIT" if control_mode == 0 else "  ·  EXIT HYPER JUMP TO RETURN TO NORMAL FLIGHT"
+	if sustained_boost_enabled:
+		controls_text = "BOOST  ·  CLICK A DESTINATION  ·  MIDDLE CLICK FOR COMMANDS"
+		controls_text += "  ·  SPACE TO EXIT" if control_mode == 0 else "  ·  EXIT BOOST TO RETURN TO NORMAL FLIGHT"
+	if hyperjump_time >= 0.0:
+		controls_text = "HYPER JUMP IN PROGRESS  ·  SCROLL TO ZOOM  ·  SHIFT-DRAG TO PAN"
 	draw_string(font, Vector2(30, size.y - 35), controls_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("91aebe"))
-	var charge_position := Vector2(30, size.y - 205)
-	var boost_label := "HOLD SPACE FOR HYPER JUMP  ·  RELEASE EARLY TO BOOST" if has_flight_controls else "FLIGHT OFFLINE  ·  INSTALL A BRIDGE"
-	if control_mode == 1 and has_flight_controls:
-		boost_label = "RTS COMMAND MODE"
-	if hyper_jump_enabled:
-		boost_label = "HYPER JUMP  ·  CLICK TO STEER" if hyper_jump_direction != Vector2.ZERO else "HYPER JUMP  ·  CLICK TO SET DIRECTION"
-	draw_string(font, charge_position + Vector2(0, -6), boost_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a6bce8") if has_flight_controls else Color("ffb58c"))
-	draw_rect(Rect2(charge_position, Vector2(250, 7)), Color("192638"))
-	draw_rect(Rect2(charge_position, Vector2(250.0 * boost_charge, 7)), Color("91a5ff"))
+	if hyperjump_time < 0.0:
+		var charge_position := Vector2(30, size.y - 205)
+		var boost_label := "HOLD SPACE FOR BOOST  ·  RELEASE EARLY FOR A BURST" if has_flight_controls else "FLIGHT OFFLINE  ·  CHOOSE A SHIP IN THE HANGAR"
+		if control_mode == 1 and has_flight_controls:
+			boost_label = "RTS COMMAND MODE"
+		if sustained_boost_enabled:
+			boost_label = "BOOST  ·  CLICK TO CHANGE DESTINATION" if boost_destination_active else "BOOST  ·  CLICK A DESTINATION"
+		draw_string(font, charge_position + Vector2(0, -6), boost_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a6bce8") if has_flight_controls else Color("ffb58c"))
+		draw_rect(Rect2(charge_position, Vector2(250, 7)), Color("192638"))
+		draw_rect(Rect2(charge_position, Vector2(250.0 * boost_charge, 7)), Color("91a5ff"))
 	var bar_left := Vector2(30, size.y - 136)
 	draw_rect(Rect2(bar_left + Vector2(-10, -24), Vector2(290, 82)), Color(0.025, 0.06, 0.1, 0.88))
 	draw_string(font, bar_left + Vector2(0, -5), "SHIELD", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("8bcfff"))
@@ -2627,7 +3464,12 @@ func _draw_hud(size: Vector2) -> void:
 	draw_rect(Rect2(bar_left + Vector2(0, 36), Vector2(250.0 * player_hull / maxf(_player_max_hull(), 1.0), 12)), Color("d76d69"))
 	draw_string(font, bar_left + Vector2(253, 11), "%d" % int(ceil(player_shield)), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a9dcff"))
 	draw_string(font, bar_left + Vector2(253, 47), "%d" % int(ceil(player_hull)), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("f0c6c1"))
-	draw_string(font, Vector2(size.x - 235, 170), "WEAPON %d: %s" % [selected_weapon, WEAPON_SLOTS[selected_weapon - 1].name], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("ffd078"))
+	var weapon_name: String = WEAPON_SLOTS[selected_weapon - 1].name
+	var weapon_color := Color("ffd078")
+	if selected_weapon == 3 and cached_turret_mounts.any(func(mount: Dictionary) -> bool: return mount.turret == MODULES.CRUISER_MACHINE_LASER):
+		weapon_name = "MACHINE LASER"
+		weapon_color = CRUISER_LASER_COLOR
+	draw_string(font, Vector2(size.x - 235, 170), "WEAPON %d: %s" % [selected_weapon, weapon_name], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, weapon_color)
 	_draw_resources(size, font)
 	var speed_text := "%03d" % int(velocity.length())
 	draw_string(font, Vector2(size.x - 115, 102), speed_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color("d9e9f3"))

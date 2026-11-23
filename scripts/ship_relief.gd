@@ -7,6 +7,8 @@ const ENGINE_HEIGHT := 50
 const ARMOUR_HEIGHT := 123
 const DETAIL_HEIGHT := 155
 const COCKPIT_HEIGHT := 187
+const SPRITE_EDGE_HEIGHT := 55
+const SPRITE_RISE := 125
 
 static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_scale: float) -> void:
 	var center := bounds.get_center()
@@ -19,11 +21,24 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	var size := Vector2i((area.size / TEXEL_SIZE).ceil())
 	var heights := PackedByteArray()
 	heights.resize(size.x * size.y)
+	var sprite_heights := PackedByteArray()
 	var masks := {}
 	for part in parts:
 		var offset := Vector2(part.x, part.y) * MODULES.CELL - center
 		var kind: String = part.type
-		if MODULES.is_decoration(part):
+		if MODULES.PRESET_TEXTURES.has(kind):
+			# Bake the fitted sprite's alpha silhouette separately from its attachments.
+			if sprite_heights.is_empty():
+				sprite_heights.resize(heights.size())
+			var texture: Texture2D = MODULES.preset_texture(part)
+			var rect := MODULES.preset_draw_rect(part, offset)
+			var drawn_size := rect.size
+			var top_left := rect.position
+			var polygon := PackedVector2Array([top_left, top_left + Vector2(drawn_size.x, 0), top_left + drawn_size, top_left + Vector2(0, drawn_size.y)])
+			var sample_uv := Transform2D(Vector2.RIGHT / drawn_size, Vector2.DOWN / drawn_size, -top_left / drawn_size)
+			var mask: Image = texture.diffuse_texture.get_image() if texture is CanvasTexture else texture.get_image()
+			_stamp(sprite_heights, size, area.position, polygon, SPRITE_EDGE_HEIGHT, mask, sample_uv, true)
+		elif MODULES.is_decoration(part):
 			if not masks.has(kind):
 				var texture: Texture2D = MODULES.DECORATION_TEXTURES[kind]
 				masks[kind] = texture.get_image()
@@ -72,6 +87,8 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 				for spoke in range(12):
 					hub.append(offset + Vector2.from_angle(TAU * float(spoke) / 12.0) * 11.0)
 				_stamp(heights, size, area.position, hub, DETAIL_HEIGHT)
+	if not sprite_heights.is_empty():
+		_raise_sprite_hull(heights, sprite_heights, size)
 	var softened := _bevel_heights(heights, size)
 	var pixels := PackedByteArray()
 	pixels.resize(heights.size() * 2)
@@ -82,8 +99,42 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	material.set_shader_parameter("relief_map", ImageTexture.create_from_image(image))
 	material.set_shader_parameter("relief_origin", area.position * part_scale)
 	material.set_shader_parameter("relief_size", Vector2(size) * TEXEL_SIZE * part_scale)
+	material.set_shader_parameter("hull_half_size", bounds.size * 0.5 * part_scale)
 
-static func _stamp(heights: PackedByteArray, size: Vector2i, origin: Vector2, polygon: PackedVector2Array, height: int, mask: Image = null, sample_uv: Transform2D = Transform2D.IDENTITY) -> void:
+static func _raise_sprite_hull(heights: PackedByteArray, silhouette: PackedByteArray, size: Vector2i) -> void:
+	# Estimate the depth inside the silhouette with a two-pass distance transform.
+	# Narrow wings stay low while the broader fuselage rises to cast shadows.
+	var distances := PackedInt32Array()
+	distances.resize(silhouette.size())
+	var stride := size.x
+	for y in range(1, size.y - 1):
+		for x in range(1, size.x - 1):
+			var index := y * stride + x
+			if silhouette[index] == 0:
+				continue
+			distances[index] = mini(
+				mini(distances[index - 1], distances[index - stride]) + 3,
+				mini(distances[index - stride - 1], distances[index - stride + 1]) + 4)
+	var furthest := 0
+	for y in range(size.y - 2, 0, -1):
+		for x in range(size.x - 2, 0, -1):
+			var index := y * stride + x
+			if silhouette[index] == 0:
+				continue
+			var from_below := mini(
+				mini(distances[index + 1], distances[index + stride]) + 3,
+				mini(distances[index + stride - 1], distances[index + stride + 1]) + 4)
+			distances[index] = mini(distances[index], from_below)
+			furthest = maxi(furthest, distances[index])
+	var crest := clampi(furthest, 15, 54)
+	for index in range(silhouette.size()):
+		if silhouette[index] > 0:
+			var depth := float(distances[index])
+			var hull_rise := SPRITE_RISE * smoothstep(0.0, float(crest), depth)
+			var detail_rise := (silhouette[index] - SPRITE_EDGE_HEIGHT) * smoothstep(3.0, 10.0, depth)
+			heights[index] = maxi(heights[index], SPRITE_EDGE_HEIGHT + roundi(hull_rise + detail_rise))
+
+static func _stamp(heights: PackedByteArray, size: Vector2i, origin: Vector2, polygon: PackedVector2Array, height: int, mask: Image = null, sample_uv: Transform2D = Transform2D.IDENTITY, sprite_relief := false) -> void:
 	# Each material section is convex, so each scan line covers one span.
 	var points := PackedVector2Array()
 	var top := INF
@@ -108,15 +159,20 @@ static func _stamp(heights: PackedByteArray, size: Vector2i, origin: Vector2, po
 			right = maxf(right, cross_x)
 		var row := y * size.x
 		for x in range(maxi(0, ceili(left - 0.5)), mini(size.x, ceili(right - 0.5))):
-			if height <= heights[row + x]:
+			if height <= heights[row + x] and not sprite_relief:
 				continue
+			var raised_height := height
 			if mask != null:
 				var local_position := origin + Vector2(float(x) + 0.5, scan_y) * TEXEL_SIZE
 				var uv := sample_uv * local_position
 				var pixel := Vector2i((uv * mask_size).clamp(Vector2.ZERO, mask_size - Vector2.ONE))
-				if mask.get_pixelv(pixel).a < 0.5:
+				var texel := mask.get_pixelv(pixel)
+				if texel.a < 0.5:
 					continue
-			heights[row + x] = height
+				if sprite_relief:
+					# Bright cockpit and panel details add a small step above the hull profile.
+					raised_height += roundi(36.0 * smoothstep(0.32, 0.75, texel.get_luminance()))
+			heights[row + x] = maxi(heights[row + x], raised_height)
 
 static func _bevel_heights(heights: PackedByteArray, size: Vector2i) -> PackedByteArray:
 	# Soften height steps for normals. Keep the original heights for crisp contact shadows.

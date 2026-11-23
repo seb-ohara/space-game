@@ -1,11 +1,10 @@
 extends Control
 
-const MIN_ZOOM := 0.05
 const MAX_ZOOM := 1.8
 
 signal closed
 signal zoom_changed(value: float)
-signal build_requested
+signal hangar_requested
 signal graphics_quality_changed(value: int)
 signal frame_cap_changed(value: int)
 signal vsync_changed(enabled: bool)
@@ -13,6 +12,7 @@ signal control_mode_changed(value: int)
 signal engine_volume_changed(value: float)
 
 var initial_zoom := 1.0
+var minimum_zoom := 0.05
 var initial_graphics_quality := 2
 var initial_frame_cap := 0
 var initial_vsync := false
@@ -58,12 +58,12 @@ func _ready() -> void:
 	column.add_child(subtitle)
 	var separator := HSeparator.new()
 	column.add_child(separator)
-	var build_button := Button.new()
-	build_button.text = "Open ship builder"
-	build_button.custom_minimum_size = Vector2(0, 40)
-	build_button.focus_mode = Control.FOCUS_NONE
-	build_button.pressed.connect(func(): build_requested.emit())
-	column.add_child(build_button)
+	var hangar_button := Button.new()
+	hangar_button.text = "Open Hangar"
+	hangar_button.custom_minimum_size = Vector2(0, 40)
+	hangar_button.focus_mode = Control.FOCUS_NONE
+	hangar_button.pressed.connect(func(): hangar_requested.emit())
+	column.add_child(hangar_button)
 	var controls_row := HBoxContainer.new()
 	column.add_child(controls_row)
 	var controls_label := Label.new()
@@ -92,18 +92,19 @@ func _ready() -> void:
 	zoom_row.add_theme_constant_override("separation", 16)
 	column.add_child(zoom_row)
 	var slider := HSlider.new()
-	slider.min_value = MIN_ZOOM
+	slider.min_value = minf(minimum_zoom, initial_zoom)
 	slider.max_value = MAX_ZOOM
-	slider.step = 0.01
+	slider.step = 0.0
+	slider.exp_edit = true
 	slider.value = initial_zoom
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	zoom_row.add_child(slider)
 	var zoom_value := Label.new()
-	zoom_value.custom_minimum_size = Vector2(54, 0)
-	zoom_value.text = "%d%%" % int(round(initial_zoom * 100.0))
+	zoom_value.custom_minimum_size = Vector2(72, 0)
+	zoom_value.text = "%.3f%%" % (initial_zoom * 100.0)
 	zoom_row.add_child(zoom_value)
 	slider.value_changed.connect(func(value: float):
-		zoom_value.text = "%d%%" % int(round(value * 100.0))
+		zoom_value.text = "%.3f%%" % (value * 100.0)
 		zoom_changed.emit(value)
 	)
 	var audio_row := HBoxContainer.new()
