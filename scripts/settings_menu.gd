@@ -1,7 +1,6 @@
 extends Control
 
 const KEY_BINDINGS := preload("res://scripts/key_bindings.gd")
-const SHIP_ADMIN := preload("res://scripts/ship_admin.gd")
 
 signal closed
 signal save_requested(return_home: bool)
@@ -13,7 +12,6 @@ signal frame_cap_changed(value: int)
 signal vsync_changed(enabled: bool)
 signal control_mode_changed(value: int)
 signal engine_volume_changed(value: float)
-signal ship_admin_save_requested(index: int, values: Dictionary)
 
 var in_flight := true
 var save_status: Label
@@ -29,8 +27,6 @@ var rebinding_action := ""
 var binding_buttons := {}
 var binding_window: Window
 var binding_message: Label
-var admin_ships: Array = []
-var ship_admin: VBoxContainer
 
 func _input(event: InputEvent) -> void:
 	_capture_binding(event)
@@ -150,7 +146,7 @@ func _ready() -> void:
 	var section_content := VBoxContainer.new()
 	section_content.custom_minimum_size = Vector2(0, 210)
 	column.add_child(section_content)
-	for section_name in (["Controls", "Sound", "Graphics", "Hangar", "Ship Admin"] if in_flight else ["Controls", "Sound", "Graphics"]):
+	for section_name in (["Controls", "Sound", "Graphics", "Hangar"] if in_flight else ["Controls", "Sound", "Graphics"]):
 		var section := VBoxContainer.new()
 		section.name = section_name
 		section.add_theme_constant_override("separation", 12)
@@ -173,11 +169,6 @@ func _ready() -> void:
 	var controls_section: VBoxContainer = sections["Controls"]
 	var sound_section: VBoxContainer = sections["Sound"]
 	var graphics_section: VBoxContainer = sections["Graphics"]
-	if in_flight:
-		ship_admin = SHIP_ADMIN.new()
-		ship_admin.ships = admin_ships
-		ship_admin.save_requested.connect(func(index: int, values: Dictionary): ship_admin_save_requested.emit(index, values))
-		sections["Ship Admin"].add_child(ship_admin)
 	var hangar_button := Button.new()
 	hangar_button.text = "Open Hangar"
 	hangar_button.custom_minimum_size = Vector2(0, 40)

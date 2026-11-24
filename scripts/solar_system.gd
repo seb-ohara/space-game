@@ -2,10 +2,22 @@ extends Node2D
 
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const PLANET_ORBIT_SPEED_SCALE := 0.025
-const MOON_ORBIT_SPEED_SCALE := 0.75
-const MIN_TRACK_RADIUS_PIXELS := 6.0
+const MOON_ORBIT_SPEED_SCALE := 0.075
+const MIN_TRACK_RADIUS_PIXELS := 3.0
 const ORBIT_COLOR := Color(0.52, 0.73, 0.85, 0.36)
 const BODY_SHADER := preload("res://scripts/celestial_body.gdshader")
+# Orbit tracks stay drawn further out than the old cutoff, then body markers and
+# names take over so worlds remain identifiable at system and stellar scales.
+const ORBIT_MIN_ZOOM := 0.00003
+const BODY_MIN_ZOOM := 0.000004
+const ICON_BODY_FADE_NEAR := 3.5
+const ICON_BODY_FADE_FAR := 8.5
+const ICON_ORBIT_FADE_START := 18.0
+const ICON_ORBIT_FADE_END := 38.0
+const MOON_ICON_ORBIT_FADE_NEAR := 8.0
+const MOON_ICON_ORBIT_FADE_FAR := 18.0
+const PLANET_ICON_RADIUS := 3.0
+const MOON_ICON_RADIUS := 2.0
 
 class Orbiter:
 	var definition: Dictionary
@@ -20,6 +32,10 @@ class Orbiter:
 	var eccentricity := 0.0
 	var center_offset := Vector2.ZERO
 	var circumference := 0.0
+	var body_radius := 1.0
+	var icon_orbit := 0.0
+	var label := ""
+	var icon_alpha := 0.0
 
 var galaxy: Dictionary
 var systems: Array[Dictionary]
@@ -69,7 +85,7 @@ func system_contents(index: int) -> Dictionary:
 	return contents_by_system[index]
 
 func starting_position() -> Vector2:
-	if galaxy.generator_version == GALAXY.VERSION:
+	if GALAXY.is_wide_version(galaxy.generator_version):
 		return system_centers[0] + GALAXY.starter_offset(GALAXY.VERSION)
 	return GALAXY.starting_position(galaxy)
 
@@ -81,7 +97,7 @@ func hyperjump_arrival_coordinates(source_index: int, destination_index: int) ->
 	var center: Vector2 = systems[destination_index].center
 	var approach := center.direction_to(systems[source_index].center)
 	var radius := float(system_contents(destination_index).edge) + GALAXY.ARRIVAL_MARGIN
-	if galaxy.generator_version == GALAXY.VERSION:
+	if GALAXY.is_wide_version(galaxy.generator_version):
 		return PackedFloat64Array([center.x + approach.x * radius, center.y + approach.y * radius])
 	var arrival := center + approach * radius
 	return PackedFloat64Array([arrival.x, arrival.y])
@@ -110,25 +126,55 @@ func _create_orbiter(definition: Dictionary, parent: Orbiter = null) -> Orbiter:
 	orbiter.axes = Vector2(major, minor)
 	orbiter.center_offset = Vector2(-major * orbiter.eccentricity, 0.0).rotated(orbiter.track.rotation)
 	orbiter.circumference = PI * (3.0 * (major + minor) - sqrt((3.0 * major + minor) * (major + 3.0 * minor)))
+	orbiter.body_radius = float(definition.radius) * float(definition.extent)
 	orbiter.visual = _make_body(definition, self)
 	orbiter.visual.top_level = true
 	return orbiter
 
 func _build_system_orbiters(index: int) -> Array[Orbiter]:
 	var orbiters: Array[Orbiter] = []
-	for definition in system_contents(index).planets:
+	var system_name := str(systems[index].name).to_upper()
+	var planets: Array = system_contents(index).planets
+	for planet_index in planets.size():
+		var definition: Dictionary = planets[planet_index]
 		var planet := _create_orbiter(definition)
+		planet.label = "%s %s" % [system_name, _roman(planet_index + 1)]
 		orbiters.append(planet)
-		for moon in definition.moons:
-			orbiters.append(_create_orbiter(moon, planet))
+		var moons: Array = definition.moons
+		for moon_index in moons.size():
+			var moon := _create_orbiter(moons[moon_index], planet)
+			moon.label = "%s%s" % [planet.label, _moon_suffix(moon_index)]
+			orbiters.append(moon)
+	# Gate the whole system's markers on its innermost planetary orbit so outer
+	# worlds do not keep their names after the rest of the system has faded out.
+	var icon_orbit := orbiters[0].axes.x if not orbiters.is_empty() else 0.0
+	for orbiter in orbiters:
+		orbiter.icon_orbit = icon_orbit
 	return orbiters
+
+static func _roman(value: int) -> String:
+	var values := [10, 9, 5, 4, 1]
+	var symbols := ["X", "IX", "V", "IV", "I"]
+	var text := ""
+	var remaining := value
+	for index in values.size():
+		while remaining >= values[index]:
+			text += symbols[index]
+			remaining -= values[index]
+	return text
+
+static func _moon_suffix(index: int) -> String:
+	if index < 26:
+		return char(97 + index)
+	return char(97 + index % 26) + str(index / 26 + 1)
 
 func update_view(clock: float, camera: Transform2D, camera_center: Vector2, screen_center: Vector2, visible_world: Rect2) -> void:
 	transform = camera
 	var zoom := camera.x.length()
 	var render_stars := zoom >= 0.00004
-	var render_orbits := zoom >= 0.00011 or systems.size() <= 5
-	if not render_stars and not render_orbits and stars.is_empty() and visible_orbiters.is_empty():
+	var render_tracks := zoom >= ORBIT_MIN_ZOOM or systems.size() <= 5
+	var render_bodies := zoom >= BODY_MIN_ZOOM
+	if not render_stars and not render_tracks and not render_bodies and stars.is_empty() and visible_orbiters.is_empty():
 		return
 	var orbit_view := visible_world.grow((GALAXY.MAX_DISC_RADIUS + 100000.0) * GALAXY.orbit_scale_for(galaxy.generator_version))
 	for index in systems.size():
@@ -145,8 +191,8 @@ func update_view(clock: float, camera: Transform2D, camera_center: Vector2, scre
 		elif not show_star and stars.has(index):
 			stars[index].free()
 			stars.erase(index)
-		var show_orbits := render_orbits and orbit_view.has_point(center)
-		if not show_orbits:
+		var show_orbiters := (render_tracks or render_bodies) and orbit_view.has_point(center)
+		if not show_orbiters:
 			if visible_orbiters.has(index):
 				for orbiter: Orbiter in visible_orbiters[index]:
 					orbiter.track.free()
@@ -157,14 +203,17 @@ func update_view(clock: float, camera: Transform2D, camera_center: Vector2, scre
 			visible_orbiters[index] = _build_system_orbiters(index)
 		for orbiter: Orbiter in visible_orbiters[index]:
 			_update_position(orbiter, center, clock)
-			_update_orbit_track(orbiter, zoom, visible_world)
-			orbiter.visual.visible = visible_world.intersects(Rect2(orbiter.center - orbiter.visual.size * 0.5, orbiter.visual.size))
+			_update_orbit_track(orbiter, zoom, visible_world, render_tracks)
+			var body_bounds := Rect2(orbiter.center - orbiter.visual.size * 0.5, orbiter.visual.size)
+			orbiter.visual.visible = render_bodies and maxf(orbiter.visual.size.x, orbiter.visual.size.y) * zoom >= 0.6 \
+				and visible_world.intersects(body_bounds)
 			if orbiter.visual.visible:
 				orbiter.visual.scale = Vector2.ONE * zoom
 				orbiter.visual.position = Vector2(
 					screen_center.x + (orbiter.center_x - camera_center.x - orbiter.visual.size.x * 0.5) * zoom,
 					screen_center.y + (orbiter.center_y - camera_center.y - orbiter.visual.size.y * 0.5) * zoom)
 				(orbiter.visual.material as ShaderMaterial).set_shader_parameter("sunward", orbiter.center.direction_to(center))
+			_update_icon(orbiter, zoom)
 
 func nearest_system(point: Vector2) -> int:
 	if point == last_lookup:
@@ -221,7 +270,7 @@ func draw_belt_markers(canvas: CanvasItem, camera: Transform2D, viewport: Rect2)
 			var marker := PackedVector2Array([anchor + Vector2(0, -5), anchor + Vector2(5, 0),
 				anchor + Vector2(0, 5), anchor + Vector2(-5, 0), anchor + Vector2(0, -5)])
 			canvas.draw_polyline(marker, tint, 1.0, true)
-			canvas.draw_string(ThemeDB.fallback_font, anchor + Vector2(10, 4), "Asteroid belt", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, tint)
+			canvas.draw_string(ThemeDB.fallback_font, anchor + Vector2(10, 4), "Asteroid field", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, tint)
 
 func _update_position(orbiter: Orbiter, star_center: Vector2, clock: float) -> void:
 	var definition := orbiter.definition
@@ -254,12 +303,89 @@ func _make_orbit(dot_texture: Texture2D) -> Line2D:
 	orbit_layer.add_child(orbit)
 	return orbit
 
-func _update_orbit_track(orbiter: Orbiter, zoom: float, visible_world: Rect2) -> void:
+func _update_icon(orbiter: Orbiter, zoom: float) -> void:
+	var orbit_fade := smoothstep(ICON_ORBIT_FADE_START, ICON_ORBIT_FADE_END, orbiter.icon_orbit * zoom)
+	var body_fade := 1.0 - smoothstep(ICON_BODY_FADE_NEAR, ICON_BODY_FADE_FAR, orbiter.body_radius * zoom)
+	var alpha := orbit_fade * body_fade
+	# Moons only surface once their planet has become a marker and their own
+	# orbit has separated on screen, keeping labels out of the way while the
+	# full disc is still readable.
+	if orbiter.parent != null:
+		alpha *= orbiter.parent.icon_alpha * smoothstep(MOON_ICON_ORBIT_FADE_NEAR, MOON_ICON_ORBIT_FADE_FAR, orbiter.axes.x * zoom)
+	orbiter.icon_alpha = alpha
+
+func has_body_icons() -> bool:
+	for index in visible_orbiters:
+		for orbiter: Orbiter in visible_orbiters[index]:
+			if orbiter.icon_alpha > 0.01:
+				return true
+	return false
+
+func draw_body_icons(canvas: CanvasItem, camera: Transform2D, viewport: Rect2) -> void:
+	var font := ThemeDB.fallback_font
+	var planet_labels: Array[Dictionary] = []
+	var moon_labels: Array[Dictionary] = []
+	for index in visible_orbiters:
+		for orbiter: Orbiter in visible_orbiters[index]:
+			if orbiter.icon_alpha <= 0.01:
+				continue
+			var point := camera * orbiter.center
+			if not viewport.grow(70.0).has_point(point):
+				continue
+			var alpha := clampf(orbiter.icon_alpha, 0.0, 1.0)
+			var tint: Color = orbiter.definition.color
+			var moon := orbiter.parent != null
+			var icon_radius := MOON_ICON_RADIUS if moon else PLANET_ICON_RADIUS
+			canvas.draw_circle(point, icon_radius * 2.8, Color(tint, 0.08 * alpha), true, -1.0, true)
+			canvas.draw_circle(point, icon_radius * 1.55, Color(tint, 0.17 * alpha), true, -1.0, true)
+			canvas.draw_circle(point, icon_radius, Color(tint, 0.94 * alpha), true, -1.0, true)
+			canvas.draw_circle(point - Vector2(icon_radius * 0.3, icon_radius * 0.3), maxf(0.7, icon_radius * 0.4), Color(1.0, 1.0, 1.0, 0.55 * alpha), true, -1.0, true)
+			if not moon and bool(orbiter.definition.get("rings", false)):
+				canvas.draw_set_transform(point, float(orbiter.definition.get("axis_angle", 0.0)), Vector2(1.0, 0.34))
+				canvas.draw_arc(Vector2.ZERO, icon_radius * 2.1, 0.0, TAU, 24, Color(tint.lerp(Color.WHITE, 0.35), 0.55 * alpha), 1.0, true)
+				canvas.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+			var label_data := {"point": point, "radius": icon_radius, "alpha": alpha, "tint": tint,
+				"text": orbiter.label, "font_size": 10 if moon else 11}
+			if moon:
+				moon_labels.append(label_data)
+			else:
+				planet_labels.append(label_data)
+	# Planet names claim space first, then moon names only draw where they fit.
+	var placed: Array[Rect2] = []
+	for label_data in planet_labels + moon_labels:
+		var text_size := font.get_string_size(str(label_data.text), HORIZONTAL_ALIGNMENT_LEFT, -1, int(label_data.font_size))
+		var gap: float = float(label_data.radius) + 6.0
+		var candidates := [
+			Vector2(gap, 4.0), Vector2(gap, -8.0), Vector2(gap, 16.0),
+			Vector2(-gap - text_size.x, 4.0), Vector2(-gap - text_size.x, -8.0), Vector2(-gap - text_size.x, 16.0)]
+		var placed_position := Vector2.INF
+		for candidate: Vector2 in candidates:
+			var label_position: Vector2 = label_data.point + candidate
+			var bounds := Rect2(label_position + Vector2(0.0, -text_size.y + 2.0), text_size)
+			if not viewport.grow(4.0).encloses(bounds):
+				continue
+			var clear := true
+			for occupied in placed:
+				if occupied.grow(3.0).intersects(bounds):
+					clear = false
+					break
+			if clear:
+				placed_position = label_position
+				placed.append(bounds)
+				break
+		if placed_position == Vector2.INF:
+			continue
+		var alpha: float = label_data.alpha
+		var label_color := Color((label_data.tint as Color).lerp(Color.WHITE, 0.62), 0.95 * alpha)
+		canvas.draw_string(font, placed_position + Vector2(1.0, 1.0), str(label_data.text), HORIZONTAL_ALIGNMENT_LEFT, -1, int(label_data.font_size), Color(0.005, 0.02, 0.045, 0.72 * alpha))
+		canvas.draw_string(font, placed_position, str(label_data.text), HORIZONTAL_ALIGNMENT_LEFT, -1, int(label_data.font_size), label_color)
+
+func _update_orbit_track(orbiter: Orbiter, zoom: float, visible_world: Rect2, render_tracks: bool) -> void:
 	var screen_radius := orbiter.axes.x * zoom
 	var dot_count := maxf(1.0, roundf(orbiter.circumference * zoom / 15.0))
 	var width := orbiter.circumference / (dot_count * 4.0)
 	var track := orbiter.track
-	track.visible = screen_radius >= MIN_TRACK_RADIUS_PIXELS and _orbit_intersects_view(track.position, orbiter.axes, width, visible_world)
+	track.visible = render_tracks and screen_radius >= MIN_TRACK_RADIUS_PIXELS and _orbit_intersects_view(track.position, orbiter.axes, width, visible_world)
 	if not track.visible:
 		return
 	var segments := 128 if screen_radius <= 256.0 else (512 if screen_radius <= 4096.0 else 2048)

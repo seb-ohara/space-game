@@ -1,6 +1,9 @@
 extends RefCounted
 
 const HD_LIGHT_CRUISER := "preset_light_cruiser_hd"
+const LIGHT_GUNSHIP := "preset_light_gunship"
+const CARGO_SHIP := "preset_cargo_ship"
+const SMALL_FIGHTER := "preset_small_fighter"
 const CRUISER_MACHINE_LASER := "cruiser_machine_laser"
 const HD_CRUISER_HULL := preload("res://ship-sprites/starters/light-cruiser-hd-hull.png")
 # Mount positions use source image pixels. Each atlas row holds that mount's
@@ -23,11 +26,17 @@ const PRESET_TEXTURES := {
 	HD_LIGHT_CRUISER: preload("res://ship-sprites/starters/light-cruiser-hd.png"),
 	"pixel_custom": preload("res://ship-sprites/starters/armoured-starter.png"),
 	"preset_armoured_starter": preload("res://ship-sprites/starters/armoured-starter.png"),
+	LIGHT_GUNSHIP: preload("res://ship-sprites/starters/light-gunship.png"),
+	CARGO_SHIP: preload("res://ship-sprites/starters/cargo-ship.png"),
+	SMALL_FIGHTER: preload("res://ship-sprites/starters/small-fighter.png"),
 }
 const PRESET_NAMES := {
 	"Built-in · Heritage Scout": "preset_scout",
 	"Built-in · HD Light Cruiser": HD_LIGHT_CRUISER,
 	"Built-in · Armoured Starter": "preset_armoured_starter",
+	"Built-in · Light Gunship": LIGHT_GUNSHIP,
+	"Built-in · Cargo Ship": CARGO_SHIP,
+	"Built-in · Small Fighter": SMALL_FIGHTER,
 }
 const SHIP_PIXELS_PER_CELL := 8.0
 const WORLD_UNITS_PER_METER := 11.25
@@ -35,10 +44,31 @@ const PRESET_LENGTHS_METERS := {
 	"preset_scout": 25.0,
 	"preset_armoured_starter": 13.0,
 	HD_LIGHT_CRUISER: 70.0,
+	LIGHT_GUNSHIP: 42.0,
+	CARGO_SHIP: 60.0,
+	SMALL_FIGHTER: 16.0,
+}
+const MIN_SHIP_LENGTH_METERS := 1.0
+const MAX_SHIP_LENGTH_METERS := 10000.0
+const PRESET_ENGINE_LAYOUTS := {
+	LIGHT_GUNSHIP: [
+		{"pixel": Vector2(124, 1018), "plume": Vector2(2.25, 1.5)},
+		{"pixel": Vector2(213, 1029), "plume": Vector2(3.0, 2.1)},
+		{"pixel": Vector2(302, 1018), "plume": Vector2(2.25, 1.5)},
+	],
+	CARGO_SHIP: [
+		{"pixel": Vector2(166, 1101), "plume": Vector2(3.4, 1.7)},
+		{"pixel": Vector2(288, 1121), "plume": Vector2(6.25, 2.6)},
+		{"pixel": Vector2(408, 1101), "plume": Vector2(3.4, 1.7)},
+	],
+	SMALL_FIGHTER: [
+		{"pixel": Vector2(161, 783), "plume": Vector2(4.6, 2.8)},
+		{"pixel": Vector2(397, 783), "plume": Vector2(4.6, 2.8)},
+	],
 }
 
 static func preset_design(kind: String) -> Array:
-	if kind in [HD_LIGHT_CRUISER, "preset_scout", "preset_armoured_starter"]:
+	if PRESET_LENGTHS_METERS.has(kind):
 		var half_size := Vector2(_default_size({"type": kind})) * 0.5
 		return [{"type":kind, "x":-floori(half_size.x), "y":-floori(half_size.y), "rotation":0}]
 	return []
@@ -123,6 +153,9 @@ const TYPES := {
 	HD_LIGHT_CRUISER: {"name":"HD Light Cruiser", "category":"PRESET SHIPS", "mass":110.0, "health":240.0, "power":25.0, "thrust":220.0, "weapon":20.0},
 	"pixel_custom": {"name":"Pixel ship", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
 	"preset_armoured_starter": {"name":"Armoured Starter", "category":"PRESET SHIPS", "mass":45.0, "health":110.0, "power":15.0, "thrust":90.0},
+	LIGHT_GUNSHIP: {"name":"Light Gunship", "category":"PRESET SHIPS", "mass":75.0, "health":185.0, "power":22.0, "thrust":165.0},
+	CARGO_SHIP: {"name":"Cargo Ship", "category":"PRESET SHIPS", "mass":120.0, "health":200.0, "power":20.0, "thrust":155.0, "cargo":600.0},
+	SMALL_FIGHTER: {"name":"Small Fighter", "category":"PRESET SHIPS", "mass":40.0, "health":95.0, "power":16.0, "thrust":110.0},
 	"retro_turret_base": {"name":"Heritage turret mount", "category":"HULL & STRUCTURE", "mass":4.0, "health":20.0},
 	"retro_machine_gun": {"name":"Heritage machine gun", "category":"WEAPONS & MINING", "mass":5.0, "health":12.0, "power":-5.0, "weapon":14.0, "turret_turn_speed":3.2},
 	"retro_nose": {"name":"Heritage nose", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
@@ -638,6 +671,12 @@ static func bounds(parts: Array) -> Rect2:
 static func dimensions_meters(parts: Array) -> Vector2:
 	return bounds(parts).size / WORLD_UNITS_PER_METER
 
+static func length_scale(base_length: float, admin: Dictionary) -> float:
+	var length: Variant = admin.get("length_meters")
+	if (length is float or length is int) and is_finite(float(length)) and float(length) >= MIN_SHIP_LENGTH_METERS and float(length) <= MAX_SHIP_LENGTH_METERS:
+		return float(length) / base_length
+	return 1.0
+
 static func clearance_issues(parts: Array) -> Array[Dictionary]:
 	var cells := {}
 	var issues: Array[Dictionary] = []
@@ -890,7 +929,7 @@ static func preset_alpha_polygons(part: Dictionary, center: Vector2, scale_facto
 	var texture := preset_texture(part)
 	var image: Image = texture.diffuse_texture.get_image() if texture is CanvasTexture else texture.get_image()
 	var bitmap := BitMap.new()
-	var alpha_threshold := 0.5 if part.type == HD_LIGHT_CRUISER else 0.1
+	var alpha_threshold := 0.5 if part.type == HD_LIGHT_CRUISER or PRESET_ENGINE_LAYOUTS.has(part.type) else 0.1
 	bitmap.create_from_image_alpha(image, alpha_threshold)
 	var rect := preset_draw_rect(part, center, scale_factor)
 	var pixel_scale := rect.size / Vector2(image.get_size())
@@ -904,7 +943,7 @@ static func preset_alpha_polygons(part: Dictionary, center: Vector2, scale_facto
 	return polygons
 
 static func material_polygons(part: Dictionary, center: Vector2, cell_size: float = CELL) -> Array[PackedVector2Array]:
-	if part.type == HD_LIGHT_CRUISER:
+	if part.type == HD_LIGHT_CRUISER or PRESET_ENGINE_LAYOUTS.has(part.type):
 		return preset_alpha_polygons(part, center, cell_size / CELL)
 	if PRESET_TEXTURES.has(part.type):
 		var rect := preset_draw_rect(part, center, cell_size / CELL)

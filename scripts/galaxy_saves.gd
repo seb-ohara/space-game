@@ -43,12 +43,12 @@ static func read(slot_id: String) -> Dictionary:
 	if not data.get("name") is String or not data.get("seed") is int or not data.get("count") is int:
 		return {}
 	var version: Variant = data.get("generator_version")
-	if version not in [GALAXY.GRID_VERSION, GALAXY.SPIRAL_VERSION, GALAXY.CLOUD_VERSION, GALAXY.VERSION]:
+	if version not in [GALAXY.GRID_VERSION, GALAXY.SPIRAL_VERSION, GALAXY.CLOUD_VERSION, GALAXY.WIDE_VERSION, GALAXY.VERSION]:
 		return {}
 	var maximum := GALAXY.GRID_MAX_SYSTEMS if version == GALAXY.GRID_VERSION else GALAXY.MAX_SYSTEMS
 	if data.count < GALAXY.MIN_SYSTEMS or data.count > maximum:
 		return {}
-	if version == GALAXY.VERSION:
+	if GALAXY.is_wide_version(version):
 		var arms: Variant = data.get("arms", GALAXY.DEFAULT_ARMS)
 		if not arms is int or arms < GALAXY.MIN_ARMS or arms > GALAXY.MAX_ARMS:
 			return {}

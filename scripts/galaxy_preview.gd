@@ -41,7 +41,7 @@ func show_progress(data: Dictionary, placed: int, populated: Dictionary, index: 
 func _refresh() -> void:
 	queue_redraw()
 	foreground.queue_redraw()
-	if galaxy.is_empty() or (galaxy.systems.size() == 1 and featured == 0 and galaxy.generator_version != GALAXY.VERSION):
+	if galaxy.is_empty() or (galaxy.systems.size() == 1 and featured == 0 and not GALAXY.is_wide_version(galaxy.generator_version)):
 		cloud.hide()
 		return
 	var reserve := clampf(size.y * 0.30, 100.0, 180.0)
@@ -92,7 +92,7 @@ func _draw_atlas() -> void:
 
 func _draw_map() -> void:
 	var systems: Array = galaxy.systems
-	if systems.size() == 1 and featured == 0 and galaxy.generator_version != GALAXY.VERSION:
+	if systems.size() == 1 and featured == 0 and not GALAXY.is_wide_version(galaxy.generator_version):
 		var frame := Rect2(Vector2(20.0, size.y - 89.0), Vector2(size.x - 40.0, 76.0))
 		_draw_system(frame, systems[0], formed[0], true)
 		return
@@ -160,17 +160,20 @@ func _draw_system(frame: Rect2, star: Dictionary, contents: Dictionary, full_vie
 			var moon_point := _draw_orbit(point, moon, scale_factor, Color(GRID, 0.74))
 			foreground.draw_circle(moon_point, 1.2 if full_view else 0.85, moon.color, true, -1.0, true)
 	for belt: Dictionary in contents.belts:
-		var anchor := origin + Vector2.from_angle(belt.phase) * float(belt.orbit) * scale_factor
-		for i in int(belt.rocks):
-			var offset := Vector2.from_angle(float(belt.phase) + i * TAU / int(belt.rocks)) * (1.6 + i % 3)
-			foreground.draw_circle(anchor + offset, 0.85 if full_view else 0.65, Color(AMBER, 0.73), true, -1.0, true)
+		# Show the short occupied arc, rather than a complete orbital ring.
+		var belt_radius := float(belt.orbit) * scale_factor
+		var half_angle: float = GALAXY.asteroid_field_half_angle(belt)
+		for i in 16:
+			var angle := float(belt.phase) + lerpf(-half_angle, half_angle, float(i) / 15.0)
+			var point := origin + Vector2.from_angle(angle) * belt_radius
+			foreground.draw_circle(point, 0.85 if full_view else 0.65, Color(AMBER, 0.73), true, -1.0, true)
 	_draw_star(origin, star.color, clampf(float(star.radius) * scale_factor * 0.60, 3.2, 15.0))
 	var text_x := frame.position.x + frame.size.x * (0.0 if full_view else 0.51)
 	var text_width := frame.end.x - text_x
 	var name_y := top + maxf(19.0, (frame.size.y - 43.0) * 0.5)
 	foreground.draw_string(ThemeDB.fallback_font, Vector2(text_x, name_y), star.name, HORIZONTAL_ALIGNMENT_LEFT, text_width, 18, star.color)
 	foreground.draw_string(ThemeDB.fallback_font, Vector2(text_x, name_y + 17.0), star.get("stage", "Stellar system"), HORIZONTAL_ALIGNMENT_LEFT, text_width, 12, TEXT)
-	var summary := "%d worlds · %d moons · %d belts" % [contents.planets.size(), moons, contents.belts.size()]
+	var summary := "%d worlds · %d moons · %d fields" % [contents.planets.size(), moons, contents.belts.size()]
 	foreground.draw_string(ThemeDB.fallback_font, Vector2(text_x, name_y + 33.0), summary, HORIZONTAL_ALIGNMENT_LEFT, text_width, 12, TEXT)
 	var history: Array = contents.get("history", [])
 	if not history.is_empty() or contents.has("frost_line_au"):

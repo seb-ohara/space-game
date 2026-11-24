@@ -32,11 +32,15 @@ vec4 star_model(vec2 point, float r, float disc) {
 	float depth = sqrt(max(1.0 - dot(point, point), 0.0));
 	vec2 seed = fract(surface_seed * vec2(0.61803, 0.38197));
 	vec2 surface = (point + depth * vec2(0.15, -0.27)) * surface_scale;
-	float coarse = texture(surface_noise, surface * 0.33 + seed).r;
-	float cells = texture(surface_noise, surface * 1.74 - seed).r;
+	// Slow counter-flowing layers make the photosphere boil without changing
+	// the seeded palette or the individual character of each star.
+	float time = TIME * (0.0175 + fract(surface_seed * 0.17) * 0.0125);
+	float coarse = texture(surface_noise, surface * 0.33 + seed + vec2(time, -time * 0.35)).r;
+	float cells = texture(surface_noise, surface * 1.74 - seed + vec2(-time * 1.4, time * 0.8)).r;
 	float angular = atan(point.y, point.x + 0.00001);
 	vec2 rim = vec2(cos(angular), sin(angular));
-	float flare = texture(surface_noise, rim * 0.51 + seed).r;
+	float flare = texture(surface_noise, rim * 0.51 + seed + vec2(time * 0.7, -time)).r;
+	float tendrils = texture(surface_noise, rim * 1.15 - seed + vec2(-time, time * 0.6)).r;
 	float alt = max(r - 1.0, 0.0);
 	float taper = 1.0 - smoothstep(disc_extent * 0.68, disc_extent, r);
 	bool compact = stellar_style == 12 || stellar_style == 13;
@@ -44,12 +48,15 @@ vec4 star_model(vec2 point, float r, float disc) {
 	float granules = smoothstep(0.27, 0.75, coarse * (giant ? 0.69 : 0.3) + cells * (giant ? 0.31 : 0.7));
 	float spots = smoothstep(0.58, 0.82, coarse) * (stellar_style == 7 ? 0.45 : 0.20);
 	vec3 surface_tint = mix(surface_dark.rgb, surface_light.rgb, 0.29 + granules * 0.56) * (0.70 + 0.30 * depth - spots);
-	vec3 glow = atmosphere_color.rgb * (exp(-alt * (compact ? 14.0 : 8.0)) * (0.21 + 0.63 * flare)
-		+ exp(-alt * 3.6) * (0.17 + flare * 0.15)) * taper;
+	float pulse = 0.92 + 0.08 * sin(TIME * 0.35 + surface_seed);
+	float corona = exp(-alt * (compact ? 8.0 : 5.0)) * (0.48 + 0.85 * flare);
+	float halo = exp(-alt * 1.65) * (0.30 + flare * 0.22);
+	float streamers = exp(-alt * 2.8) * pow(tendrils, 3.0) * 0.8;
+	vec3 glow = atmosphere_color.rgb * (corona + halo + streamers) * taper * pulse;
 	if (stellar_style == 13) {
-		vec2 beam = rotate_point(point, surface_seed + sin(TIME * 0.68) * 0.4);
+		vec2 beam = rotate_point(point, surface_seed + sin(TIME * 0.34) * 0.4);
 		float shaft = 1.0 - smoothstep(0.012, 0.25, abs(beam.y) / (0.5 + abs(beam.x) * 0.45));
-		glow += vec3(0.46, 0.55, 1.0) * shaft * taper * (0.38 + 0.20 * sin(TIME * 7.0));
+		glow += vec3(0.46, 0.55, 1.0) * shaft * taper * (0.38 + 0.20 * sin(TIME * 3.5));
 		surface_tint = mix(surface_tint, vec3(0.92, 0.96, 1.0), 0.57);
 	}
 	return vec4(mix(glow, surface_tint, disc), disc);
@@ -134,9 +141,12 @@ void fragment() {
 		vec3 radiance = vec3(0.0);
 		if (disc < 1.0 && distance_to_center < disc_extent) {
 			float altitude = max(distance_to_center - 1.0, 0.0);
-			float corona = exp(-altitude * 9.0);
-			float outer_glow = exp(-altitude * 2.65);
-			float fade = 1.0 - smoothstep(1.45, disc_extent, distance_to_center);
+			float angle = atan(point.y, point.x + 0.00001);
+			vec2 rim = vec2(cos(angle), sin(angle));
+			float flare = texture(surface_noise, rim * 0.7 + vec2(TIME * 0.0125, -TIME * 0.009)).r;
+			float corona = exp(-altitude * 5.0) * (0.8 + flare);
+			float outer_glow = exp(-altitude * 1.65) * (0.9 + flare * 0.5);
+			float fade = 1.0 - smoothstep(disc_extent * 0.68, disc_extent, distance_to_center);
 			vec3 corona_color = blue ? vec3(0.10, 0.37, 0.75) : vec3(0.56, 0.26, 0.072);
 			vec3 halo_color = blue ? vec3(0.024, 0.13, 0.32) : vec3(0.34, 0.125, 0.032);
 			radiance = (corona_color * corona + halo_color * outer_glow) * fade * (1.0 - disc);
@@ -144,8 +154,8 @@ void fragment() {
 		if (disc > 0.0) {
 			float depth = sqrt(max(1.0 - dot(point, point), 0.0));
 			vec2 surface = point + depth * vec2(0.27, -0.19);
-			float terrain = texture(surface_noise, surface * 0.37 + vec2(0.42, 0.18)).r;
-			float detail = texture(surface_noise, surface * 1.81 + vec2(0.14, 0.61)).r;
+			float terrain = texture(surface_noise, surface * 0.37 + vec2(0.42, 0.18) + vec2(TIME * 0.01, -TIME * 0.004)).r;
+			float detail = texture(surface_noise, surface * 1.81 + vec2(0.14, 0.61) + vec2(-TIME * 0.0175, TIME * 0.01)).r;
 			float plasma = smoothstep(0.22, 0.8, terrain * 0.42 + detail * 0.58);
 			vec3 legacy_surface_dark = blue ? vec3(0.26, 0.64, 1.0) : vec3(1.0, 0.51, 0.16);
 			vec3 legacy_surface_light = blue ? vec3(0.76, 0.93, 1.0) : vec3(1.0, 0.88, 0.56);

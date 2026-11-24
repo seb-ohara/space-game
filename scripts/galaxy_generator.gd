@@ -4,7 +4,8 @@ enum BodyKind { SUN, TERRESTRIAL, MOON, BLUE_DWARF, GAS_GIANT, ICE_PLANET, ROCKY
 	RED_DWARF, RED_GIANT, BLUE_GIANT, BLUE_SUPERGIANT, RED_SUPERGIANT, WHITE_DWARF, NEUTRON_STAR,
 	SUPER_EARTH, NEPTUNIAN, DWARF_PLANET, HOT_JUPITER, ULTRA_HOT_NEPTUNE, CHTHONIAN, LAVA, OCEAN, CARBON, PULSAR_PLANET }
 
-const VERSION := 4
+const VERSION := 5
+const WIDE_VERSION := 4
 const CLOUD_VERSION := 3
 const MIN_ARMS := 3
 const MAX_ARMS := 6
@@ -40,7 +41,7 @@ const STAR_NAMES := [
 static func create_map(seed_value: int, count: int, version: int = VERSION, arms: int = DEFAULT_ARMS) -> Dictionary:
 	if version == GRID_VERSION:
 		return _create_grid_map(seed_value, count)
-	if version in [CLOUD_VERSION, VERSION]:
+	if version in [CLOUD_VERSION, WIDE_VERSION, VERSION]:
 		return _create_cloud_map(seed_value, count, version, arms)
 	return _create_spiral_map(seed_value, count)
 
@@ -164,12 +165,12 @@ static func starter_offset(version: int) -> Vector2:
 	return Vector2.from_angle(STARTER_PHASE) * STARTER_ORBIT * orbit_scale_for(version) + STARTER_OFFSET
 
 static func starting_position(galaxy: Dictionary) -> Vector2:
-	if int(galaxy.generator_version) == VERSION:
+	if is_wide_version(int(galaxy.generator_version)):
 		return galaxy.systems[0].center + starter_offset(VERSION)
 	return galaxy.systems[0].center + Vector2.from_angle(STARTER_PHASE) * STARTER_ORBIT + STARTER_OFFSET
 
 static func form_system(seed_value: int, star: Dictionary, version: int = -1) -> Dictionary:
-	if version == VERSION or (version < 0 and star.get("wide_orbits", false)):
+	if is_wide_version(version) or (version < 0 and star.get("wide_orbits", false)):
 		var contents := _accrete_system(seed_value, star)
 		var edge := float(star.radius) * float(star.extent)
 		for planet: Dictionary in contents.planets:
@@ -321,10 +322,61 @@ static func asteroid_sites(seed_value: int, star: Dictionary, contents: Dictiona
 		for i in int(belt.rocks):
 			var offset := bearing.rotated(TAU * float(i) / int(belt.rocks)) * rng.randf_range(950.0, 2100.0)
 			sites.append({"position": cluster_center + offset, "radius": rng.randf_range(125.0, 245.0), "ore": float(belt.ore)})
+	# Keep original pocket indices intact. New field IDs are separate from the
+	# former full-ring IDs, so saved depletion cannot attach to a different rock.
+	var occupied := {}
+	for site in sites:
+		var point: Vector2 = site.position - center
+		var cell := Vector2i(floori(point.x / 500.0), floori(point.y / 500.0))
+		if not occupied.has(cell):
+			occupied[cell] = []
+		occupied[cell].append(point)
+	for belt_index in contents.belts.size():
+		var belt: Dictionary = contents.belts[belt_index]
+		var field_rng := _random_stream(seed_value, "asteroid-field/%d/%d" % [int(star.id), belt_index])
+		var count := field_rng.randi_range(250, 1000) - int(belt.rocks)
+		var half_angle := asteroid_field_half_angle(belt)
+		var bend_phase := field_rng.randf_range(0.0, TAU)
+		var width_phase := field_rng.randf_range(0.0, TAU)
+		var density_phase := field_rng.randf_range(0.0, TAU)
+		for i in count:
+			# Reject close neighbours, including the original pocket, to leave room
+			# for ships and avoid visibly overlapping rock silhouettes.
+			for attempt in 500:
+				var along := field_rng.randf_range(-1.0, 1.0)
+				# Broad dense and sparse patches break up the otherwise even strip.
+				var density := 0.75 + 0.25 * sin(along * 8.0 + density_phase)
+				if field_rng.randf() > density:
+					continue
+				var angle := float(belt.phase) + along * half_angle
+				var bend := 350.0 * sin(along * 4.5 + bend_phase) + 150.0 * sin(along * 9.0 + width_phase)
+				var taper := lerpf(0.38, 1.0, pow(1.0 - absf(along), 0.45))
+				var width := (0.78 + 0.22 * sin(along * 7.0 + width_phase)) * taper
+				var distance := float(belt.orbit) + bend + field_rng.randf_range(-2500.0, 2500.0) * width
+				var point := Vector2.from_angle(angle) * distance
+				var cell := Vector2i(floori(point.x / 500.0), floori(point.y / 500.0))
+				var clear := true
+				for x in range(-1, 2):
+					for y in range(-1, 2):
+						for other: Vector2 in occupied.get(cell + Vector2i(x, y), []):
+							if point.distance_squared_to(other) < 500.0 * 500.0:
+								clear = false
+				if not clear:
+					continue
+				if not occupied.has(cell):
+					occupied[cell] = []
+				occupied[cell].append(point)
+				sites.append({"position": center + point, "radius": field_rng.randf_range(125.0, 245.0),
+					"ore": float(belt.ore), "field_id": "%d/%d" % [belt_index, i]})
+				break
 	if not star_relative and origin != Vector2.ZERO:
 		for site in sites:
 			site.position -= origin
 	return sites
+
+# A short orbital arc, up to 150,000 units long, with an irregular profile.
+static func asteroid_field_half_angle(belt: Dictionary) -> float:
+	return minf(0.6, 75000.0 / maxf(1.0, float(belt.orbit)))
 
 static func _random_stream(seed_value: int, stream: String) -> RandomNumberGenerator:
 	var result := RandomNumberGenerator.new()
@@ -362,12 +414,13 @@ static func _create_cloud_map(seed_value: int, count: int, version: int, arms: i
 	var shape := {"rotation": rng.randf_range(0.0, TAU), "phase": rng.randf_range(0.0, TAU),
 		"winding": rng.randf_range(3.9, 5.5) * (-1.0 if rng.randf() < 0.5 else 1.0),
 		"arms": 2 if rng.randf() < 0.8 else 3}
-	var wide := version == VERSION
+	var wide := is_wide_version(version)
 	if wide:
 		shape.arms = clampi(arms, MIN_ARMS, MAX_ARMS)
 	var lane_scale := minf(1.0, 3.6 / int(shape.arms)) if wide else 1.0
 	var flatten := Vector2(1.0, rng.randf_range(0.78, 0.95))
-	var gap := 0.84 / sqrt(float(count))
+	var base_gap := 0.84 / sqrt(float(count))
+	var gap := base_gap * (0.32 if version == VERSION else 1.0)
 	var positions: Array[Vector2] = []
 	var cells := {}
 	var home := Vector2.from_angle(cloud_arm_angle(0.66, 0, shape)) * 0.66 * flatten
@@ -380,6 +433,17 @@ static func _create_cloud_map(seed_value: int, count: int, version: int, arms: i
 		while true:
 			var placed := false
 			for attempt in 160:
+				# Some stars form in small associations around an existing system.
+				# The remaining stars sample the arms independently, leaving voids between groups.
+				if version == VERSION and rng.randf() < 0.65:
+					var anchor: Vector2 = home if positions.is_empty() else positions[rng.randi_range(0, positions.size() - 1)]
+					point = anchor + Vector2.from_angle(rng.randf_range(0.0, TAU)) * base_gap * rng.randf_range(0.34, 0.85)
+					if (point / flatten).length() > 0.98:
+						continue
+					if _fits_spiral_point(cells, point, gap):
+						placed = true
+						break
+					continue
 				if id <= core_count:
 					point = Vector2.from_angle(rng.randf_range(0.0, TAU)) * CORE_RADIUS * pow(rng.randf(), 0.72)
 				else:
@@ -409,7 +473,8 @@ static func _create_cloud_map(seed_value: int, count: int, version: int, arms: i
 
 	# The small cushion keeps the actual stored Vector2 spacing above the minimum.
 	var separation := separation_for(version)
-	var radius_scale := (separation + (8192.0 if wide else 512.0)) / gap
+	var scale_gap := base_gap if version == VERSION else gap
+	var radius_scale := (separation + (8192.0 if wide else 512.0)) / scale_gap
 	if count == 1:
 		radius_scale = separation * 0.5 if wide else GRID_SECTOR_SIZE * 0.31
 	var margin := MAX_DISC_RADIUS * orbit_scale_for(version) + 400000.0
@@ -521,13 +586,16 @@ static func _stellar_color(temperature: float) -> Color:
 		return Color("ffba79").lerp(Color("fff7df"), smoothstep(4500.0, 6500.0, temperature))
 	return Color("fff7df").lerp(Color("86b4ff"), smoothstep(6500.0, 28000.0, temperature))
 
+static func is_wide_version(version: int) -> bool:
+	return version in [WIDE_VERSION, VERSION]
+
 static func separation_for(version: int) -> float:
-	if version == VERSION:
+	if is_wide_version(version):
 		return WIDE_SYSTEM_SEPARATION
 	return SYSTEM_SEPARATION if version == CLOUD_VERSION else SPIRAL_SEPARATION
 
 static func orbit_scale_for(version: int) -> float:
-	return ORBIT_SCALE if version == VERSION else 1.0
+	return ORBIT_SCALE if is_wide_version(version) else 1.0
 
 # Physical properties are in Earth/Solar units. Compress distances independently
 # of body size so the whole disc remains usable at the game's system zoom.

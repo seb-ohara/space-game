@@ -2,10 +2,14 @@ extends Control
 
 signal closed
 signal launch_requested(parts: Array)
+signal admin_save_requested(index: int, values: Dictionary)
 
 const MODULES := preload("res://scripts/ship_modules.gd")
+const SHIP_ADMIN := preload("res://scripts/ship_admin.gd")
 const LIBRARY := preload("res://scripts/ship_design_library.gd")
-const PIXEL_EDITOR := preload("res://scripts/pixel_ship_editor.gd")
+const LOADOUT := preload("res://scripts/ship_loadout.gd")
+const ICONS := preload("res://scripts/module_icons.gd")
+const HARDPOINT_PREVIEW := preload("res://scripts/hardpoint_preview.gd")
 const DECK := Color("101c29")
 const INK := Color("e5ebee")
 const MUTED := Color("9fb3c0")
@@ -13,24 +17,28 @@ const EDGE := Color("3b5060")
 const AMBER := Color("efbc7d")
 
 var current_parts: Array = []
+var current_ship_values: Dictionary = {}
+var admin_ships: Array = []
+var active_fleet_index := 0
+var dragging_slot := -1
+var drag_offset := Vector2.ZERO
 var preview_draw: Callable
 var library_entries: Variant
 var designs: Array[Dictionary] = []
 var selected_index := 0
-var editing_saved_name := ""
-var editor: PIXEL_EDITOR
 var body: VBoxContainer
+var navigation: HBoxContainer
+var admin_tab: Button
+var admin_view: VBoxContainer
+var ship_admin: SHIP_ADMIN
 var library_view: HBoxContainer
-var editor_view: VBoxContainer
 var library_list: ItemList
 var preview: Control
 var ship_title: Label
 var ship_details: Label
 var status: Label
-var edit_button: Button
 var delete_button: Button
 var launch_button: Button
-var name_field: LineEdit
 var confirmation: ConfirmationDialog
 var confirm_action: Callable
 
@@ -73,7 +81,10 @@ func _ready() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_button(header, "Return to flight", request_close)
 	body.add_child(HSeparator.new())
+	_create_navigation()
 	_create_library_view()
+	_create_admin_view()
+	_show_library()
 	status = _label(body, "", 15, MUTED)
 	status.custom_minimum_size.y = 23
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -125,6 +136,52 @@ func _button(parent: Control, caption: String, action: Callable, primary: bool =
 	parent.add_child(button)
 	return button
 
+func _create_navigation() -> void:
+	navigation = HBoxContainer.new()
+	navigation.add_theme_constant_override("separation", 8)
+	body.add_child(navigation)
+	admin_tab = _tab("Ship admin")
+
+func _tab(caption: String) -> Button:
+	var tab := Button.new()
+	tab.text = caption
+	tab.toggle_mode = true
+	tab.custom_minimum_size = Vector2(170, 36)
+	tab.focus_mode = Control.FOCUS_NONE
+	tab.pressed.connect(func():
+		admin_view.visible = tab.button_pressed
+		dragging_slot = -1
+		_refresh_preview_context()
+	)
+	navigation.add_child(tab)
+	return tab
+
+func _show_library() -> void:
+	library_view.show()
+	admin_view.hide()
+	admin_tab.set_pressed_no_signal(false)
+
+func _create_admin_view() -> void:
+	admin_view = VBoxContainer.new()
+	admin_view.custom_minimum_size.x = 390
+	admin_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	admin_view.add_theme_constant_override("separation", 12)
+	library_view.add_child(admin_view)
+	admin_view.hide()
+	_label(admin_view, "Ship admin", 22, INK)
+	var hint := _label(admin_view, "Adjust the size and flight stats of any ship in your fleet. Changes are saved with this galaxy.", 15, MUTED)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ship_admin = SHIP_ADMIN.new()
+	ship_admin.ships = admin_ships
+	ship_admin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	ship_admin.save_requested.connect(func(index: int, values: Dictionary): admin_save_requested.emit(index, values))
+	ship_admin.slots_changed.connect(_refresh_preview_context)
+	admin_view.add_child(ship_admin)
+	ship_admin.selector.item_selected.connect(func(_index: int):
+		dragging_slot = -1
+		_refresh_preview_context()
+	)
+
 func _create_library_view() -> void:
 	library_view = HBoxContainer.new()
 	library_view.add_theme_constant_override("separation", 20)
@@ -145,8 +202,6 @@ func _create_library_view() -> void:
 	library_list.add_theme_stylebox_override("panel", _style(Color("132230"), EDGE))
 	library_list.item_selected.connect(_select_design)
 	sidebar.add_child(library_list)
-	var new_button := _button(sidebar, "New pixel ship", func(): _open_editor({}))
-	new_button.tooltip_text = "Start with a blank canvas."
 
 	var bay := VBoxContainer.new()
 	bay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -156,16 +211,22 @@ func _create_library_view() -> void:
 	ship_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	ship_details = _label(bay, "", 16, MUTED)
 	ship_details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	preview = Control.new()
+	var hardpoint_preview := HARDPOINT_PREVIEW.new()
+	hardpoint_preview.drag_from_hardpoint = _module_drag_data
+	hardpoint_preview.can_drop_module = _can_drop_module
+	hardpoint_preview.drop_module = _drop_module
+	preview = hardpoint_preview
 	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	preview.custom_minimum_size.y = 120
 	preview.clip_contents = true
+	preview.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	preview.tooltip_text = "Drag squares to move hardpoints. Drop modules onto them; right-click to remove a module."
 	preview.draw.connect(_draw_preview)
+	preview.gui_input.connect(_preview_input)
 	bay.add_child(preview)
 	var actions := HBoxContainer.new()
 	bay.add_child(actions)
-	edit_button = _button(actions, "Edit pixel copy", func(): _open_editor(designs[selected_index]))
 	delete_button = _button(actions, "Delete saved ship", _request_delete)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -205,29 +266,53 @@ func _has_pixel_art(parts: Array) -> bool:
 	return parts.size() == 1 and MODULES.PRESET_TEXTURES.has(parts[0].type)
 
 func _select_design(index: int) -> void:
+	dragging_slot = -1
 	selected_index = index
 	var design := designs[index]
 	var parts: Array = design.parts
 	var category: String = design.category
 	var dimensions := MODULES.dimensions_meters(parts)
 	var stats := MODULES.stats(parts)
+	if category == "Current" and not current_ship_values.is_empty():
+		dimensions = Vector2(current_ship_values.width, current_ship_values.length_meters)
+		stats.health = current_ship_values.health
 	ship_title.text = design.name
 	ship_details.text = "%s  •  %d hull\nLength: %.1f m  •  Width: %.1f m" % [category, int(stats.health), dimensions.y, dimensions.x]
-	for part in parts:
-		if MODULES.CRUISER_TURRET_LAYOUTS.has(part.type):
-			ship_details.text += "\n%d twin-barrel machine lasers  •  Weapon slot 3" % MODULES.CRUISER_TURRET_LAYOUTS[part.type].mounts.size()
-			break
 	var pixel_art := _has_pixel_art(parts)
 	if not pixel_art:
 		ship_details.text += "\nLegacy modular ship"
 		if design.flight_error != "":
 			ship_details.text += " · " + design.flight_error
-	edit_button.visible = pixel_art
-	edit_button.text = "Edit pixel ship" if category == "Saved" and parts[0].type == "pixel_custom" else "Edit pixel copy"
 	delete_button.visible = category == "Saved"
 	launch_button.disabled = design.flight_error != ""
 	launch_button.tooltip_text = design.flight_error
+	_refresh_preview_context()
+
+func _refresh_preview_context() -> void:
+	if designs.is_empty() or not is_instance_valid(ship_admin):
+		return
+	if selected_index == 0 and admin_view.visible and ship_admin.selected_index < admin_ships.size():
+		var ship: Dictionary = admin_ships[ship_admin.selected_index]
+		ship_title.text = ship.name
+		var values: Dictionary = ship.values
+		ship_details.text = "Fleet ship  •  %d hull\nLength: %.1f m  •  Width: %.1f m" % [int(values.get("health", 0)), float(values.length_meters), float(values.width)]
+	elif selected_index == 0:
+		ship_title.text = designs[0].name
+		if not current_ship_values.is_empty():
+			ship_details.text = "Current  •  %d hull\nLength: %.1f m  •  Width: %.1f m" % [int(current_ship_values.health), float(current_ship_values.length_meters), float(current_ship_values.width)]
 	preview.queue_redraw()
+
+func _preview_parts() -> Array:
+	if selected_index == 0 and admin_view.visible and ship_admin.selected_index < admin_ships.size():
+		return admin_ships[ship_admin.selected_index].get("parts", current_parts)
+	return designs[selected_index].parts
+
+func _preview_ship_rect() -> Rect2:
+	var bounds := MODULES.bounds(_preview_parts())
+	var insets := (preview.size - Vector2(108, 92)).max(Vector2.ONE)
+	var fit := minf(insets.x / bounds.size.x, insets.y / bounds.size.y)
+	var size := bounds.size * fit
+	return Rect2((preview.size - size) * 0.5, size)
 
 func _draw_preview() -> void:
 	var area := Rect2(Vector2.ZERO, preview.size)
@@ -242,7 +327,7 @@ func _draw_preview() -> void:
 			var finish := start
 			finish[other] = area.size[other]
 			preview.draw_line(start, finish, Color("263b49") if line == 0 else Color("172834"))
-	var parts: Array = designs[selected_index].parts
+	var parts: Array = _preview_parts()
 	var bounds := MODULES.bounds(parts)
 	var insets := (area.size - Vector2(108, 92)).max(Vector2.ONE)
 	var fit := minf(insets.x / bounds.size.x, insets.y / bounds.size.y)
@@ -252,98 +337,94 @@ func _draw_preview() -> void:
 	if preview_draw.is_valid():
 		preview_draw.call(preview, {"parts": parts})
 	preview.draw_set_transform(Vector2.ZERO)
+	if selected_index == 0 and admin_view.visible:
+		var slots := ship_admin._slot_values()
+		var ship_rect := _preview_ship_rect()
+		for index in slots.size():
+			var point := ship_rect.position + Vector2(slots[index].x, slots[index].y) * ship_rect.size
+			var square := Rect2(point - Vector2.ONE * 16.0, Vector2.ONE * 32.0)
+			var outline := AMBER if index == dragging_slot else Color("62d8e7")
+			preview.draw_rect(square, Color("10212d"))
+			preview.draw_rect(square, outline, false, 2.0)
+			ICONS.draw(preview, square.grow(-5.0), slots[index].type, outline)
+			preview.draw_string(ThemeDB.fallback_font, point + Vector2(10, -12), str(index + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
 	preview.draw_rect(area, EDGE, false, 1.0)
 
-func _open_editor(design: Dictionary) -> void:
-	editing_saved_name = ""
-	var suggestion := ""
-	editor = PIXEL_EDITOR.new()
-	if not design.is_empty():
-		var part: Dictionary = design.parts[0]
-		editor.source = MODULES.preset_texture(part).get_image()
-		if part.type != "pixel_custom":
-			var world_size := MODULES.preset_draw_rect(part, Vector2.ZERO).size
-			var pixel_size := MODULES.CELL / MODULES.SHIP_PIXELS_PER_CELL
-			var target := (world_size / pixel_size).round().clamp(Vector2.ONE, Vector2(PIXEL_EDITOR.CANVAS_SIZE))
-			editor.source.resize(int(target.x), int(target.y), Image.INTERPOLATE_NEAREST)
-		editor.source.convert(Image.FORMAT_RGBA8)
-		var origin: Variant = part.get("pixel_origin")
-		if origin is Array and origin.size() == 2 and typeof(origin[0]) in [TYPE_INT, TYPE_FLOAT] and typeof(origin[1]) in [TYPE_INT, TYPE_FLOAT]:
-			editor.source_origin = Vector2i(int(origin[0]), int(origin[1]))
-		if design.category == "Saved" and part.type == "pixel_custom":
-			editing_saved_name = design.name
-			suggestion = editing_saved_name
-		else:
-			suggestion = "%s copy" % design.name
+func _hardpoint_at(position: Vector2) -> int:
+	if selected_index != 0 or not admin_view.visible:
+		return -1
+	var slots := ship_admin._slot_values()
+	var ship_rect := _preview_ship_rect()
+	var nearest := INF
+	var selected := -1
+	for index in slots.size():
+		var point := ship_rect.position + Vector2(slots[index].x, slots[index].y) * ship_rect.size
+		var difference := (position - point).abs()
+		var distance := difference.length_squared()
+		if difference.x <= 16.0 and difference.y <= 16.0 and distance <= nearest:
+			nearest = distance
+			selected = index
+	return selected
 
-	editor_view = VBoxContainer.new()
-	editor_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	editor_view.add_theme_constant_override("separation", 12)
-	body.add_child(editor_view)
-	body.move_child(editor_view, status.get_index())
-	var toolbar := HBoxContainer.new()
-	toolbar.add_theme_constant_override("separation", 10)
-	editor_view.add_child(toolbar)
-	_button(toolbar, "Back to library", _request_editor_back)
-	name_field = LineEdit.new()
-	name_field.max_length = 60
-	name_field.text = suggestion
-	name_field.placeholder_text = "Ship name"
-	name_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	toolbar.add_child(name_field)
-	_button(toolbar, "Save to library", _save, true)
-	var label := _label(editor_view, "Nose points up  •  256 × 256 pixel canvas", 15, MUTED)
-	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	editor_view.add_child(editor)
-	library_view.hide()
-	_set_status("")
+func _module_drag_data(position: Vector2) -> Variant:
+	var index := _hardpoint_at(position)
+	if index < 0:
+		return null
+	var kind: String = ship_admin._slot_values()[index].type
+	if kind == "":
+		return null
+	return {"module_type": kind, "source_index": index, "source_ship": ship_admin.selected_index}
 
-func _save() -> void:
-	var ship_name := name_field.text.strip_edges()
-	if library_entries == null:
-		_set_status("The saved ship library could not be read. Saving is unavailable.")
-		return
-	if ship_name.is_empty():
-		_set_status("Give your ship a name before saving.")
-		name_field.grab_focus()
-		return
-	if ship_name != editing_saved_name:
-		for used_name in library_entries.keys() + MODULES.PRESET_NAMES.keys():
-			if String(used_name).trim_prefix("Built-in · ").nocasecmp_to(ship_name) == 0:
-				_set_status("That name is already in use. Choose another name to save a copy.")
-				return
-	var parts := editor.to_ship()
-	if parts.is_empty():
-		_set_status("Draw a hull before saving your ship.")
-		return
-	var error := MODULES.validate(parts)
-	if not error.is_empty():
-		_set_status(error)
-		return
-	var updated: Dictionary = library_entries.duplicate()
-	updated[ship_name] = parts
-	if not LIBRARY.write(updated):
-		_set_status("The ship could not be saved. Your artwork is still open.")
-		return
-	library_entries = updated
-	_close_editor(ship_name)
-	_set_status("Saved %s. Select Launch ship to take it out." % ship_name)
+func _can_drop_module(position: Vector2, data: Variant) -> bool:
+	if not data is Dictionary or not data.get("module_type") is String:
+		return false
+	var kind: String = data.module_type
+	if kind == "" or not LOADOUT.TYPES.has(kind) or _hardpoint_at(position) < 0:
+		return false
+	var source := int(data.get("source_index", -1))
+	if source >= 0:
+		var slots := ship_admin._slot_values()
+		return data.get("source_ship", -1) == ship_admin.selected_index and source < slots.size() and slots[source].type == kind
+	return source == -1
 
-func _request_editor_back() -> void:
-	if editor.is_dirty():
-		_confirm("Discard the unsaved pixel edits?", "Discard edits", _close_editor)
-	else:
-		_close_editor()
+func _drop_module(position: Vector2, data: Variant) -> void:
+	if not _can_drop_module(position, data):
+		return
+	var target := _hardpoint_at(position)
+	var source := int(data.get("source_index", -1))
+	if source >= 0 and source != target:
+		ship_admin.set_slot_type(source, "")
+	ship_admin.set_slot_type(target, data.module_type)
+	_set_status("Module fitted. Save ship changes to apply the loadout.")
 
-func _close_editor(select_name: String = "") -> void:
-	editor_view.hide()
-	editor_view.queue_free()
-	editor = null
-	library_view.show()
-	if not select_name.is_empty():
-		_refresh_library(select_name)
-	_set_status("")
+func _preview_input(event: InputEvent) -> void:
+	if selected_index != 0 or not admin_view.visible:
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		var index := _hardpoint_at(event.position)
+		if index >= 0:
+			ship_admin.set_slot_type(index, "")
+			_set_status("Module removed. Save ship changes to apply the loadout.")
+			accept_event()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed and not event.shift_pressed:
+			dragging_slot = _hardpoint_at(event.position)
+			if dragging_slot >= 0:
+				var slot: Dictionary = ship_admin._slot_values()[dragging_slot]
+				var ship_rect := _preview_ship_rect()
+				drag_offset = event.position - (ship_rect.position + Vector2(slot.x, slot.y) * ship_rect.size)
+				preview.queue_redraw()
+				accept_event()
+		elif not event.pressed and dragging_slot >= 0:
+			dragging_slot = -1
+			_set_status("Hardpoint moved. Save ship changes to apply the loadout.")
+			preview.queue_redraw()
+			accept_event()
+	elif event is InputEventMouseMotion and dragging_slot >= 0:
+		var ship_rect := _preview_ship_rect()
+		var position: Vector2 = (event.position - drag_offset - ship_rect.position) / ship_rect.size
+		ship_admin.place_slot(dragging_slot, position)
+		accept_event()
 
 func _request_delete() -> void:
 	var ship_name: String = designs[selected_index].name
@@ -373,16 +454,23 @@ func _launch() -> void:
 func _set_status(message: String) -> void:
 	status.text = message
 
+func set_admin_status(message: String) -> void:
+	if is_instance_valid(ship_admin):
+		ship_admin.set_status(message)
+
+func refresh_admin_values(index: int, values: Dictionary, is_active: bool) -> void:
+	admin_ships[index].values = values
+	if ship_admin.selected_index == index:
+		ship_admin.refresh_selection()
+	if is_active:
+		current_ship_values = values
+		if selected_index == 0:
+			_select_design(selected_index)
+
 func request_close() -> void:
-	if is_instance_valid(editor) and editor.is_dirty():
-		_confirm("Return to flight and discard the unsaved pixel edits?", "Discard and return", func(): closed.emit())
-	else:
-		closed.emit()
+	closed.emit()
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
-		if is_instance_valid(editor):
-			_request_editor_back()
-		else:
-			request_close()
+		request_close()
 		get_viewport().set_input_as_handled()

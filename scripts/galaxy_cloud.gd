@@ -15,14 +15,14 @@ func _init() -> void:
 	hide()
 
 func configure(data: Dictionary) -> void:
-	configured = int(data.get("generator_version", 0)) in [GALAXY.CLOUD_VERSION, GALAXY.VERSION]
+	configured = int(data.get("generator_version", 0)) in [GALAXY.CLOUD_VERSION, GALAXY.WIDE_VERSION, GALAXY.VERSION]
 	if not configured:
 		hide()
 		return
 	var shape: Dictionary = data.spiral
 	galaxy_scale = shape.scale
 	galaxy_center = (data.world_size as Vector2) * 0.5
-	atmosphere.set_shader_parameter("lane_scale", minf(1.0, 3.6 / int(shape.arms)) if data.generator_version == GALAXY.VERSION else 1.0)
+	atmosphere.set_shader_parameter("lane_scale", minf(1.0, 3.6 / int(shape.arms)) if GALAXY.is_wide_version(data.generator_version) else 1.0)
 	for key in ["rotation", "phase", "winding", "arms"]:
 		atmosphere.set_shader_parameter(key, shape[key])
 
