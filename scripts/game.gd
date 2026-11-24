@@ -241,8 +241,22 @@ var stars: Array[Dictionary] = []
 var starfield_camera_center := Vector2.ZERO
 var starfield_offset := Vector2.ZERO
 var rng := RandomNumberGenerator.new()
-var elapsed := 0.0
+const SIMULATION_CLOCK := preload("res://scripts/simulation/simulation_clock.gd")
+const SIMULATION_SCHEDULER := preload("res://scripts/simulation/simulation_scheduler.gd")
+var simulation_clock := SIMULATION_CLOCK.new()
+var simulation_scheduler := SIMULATION_SCHEDULER.new()
+var elapsed: float:
+	get: return simulation_clock.elapsed
 var play_time := 0.0
+var simulation_rate_control: OptionButton
+var simulation_calendar: Label
+var calendar_dirty := true
+var flight_redraw_pending := false
+var last_render_usec := 0
+var rate_sample_usec := 0
+var rate_sample_seconds := 0.0
+var achieved_rate := 0.0
+var changed_physics_cadence := false
 var asteroids: Array[Dictionary] = []
 var selected_asteroid := -1
 var mining_asteroid := -1
@@ -371,7 +385,10 @@ func _start_flight(galaxy: Dictionary, contents: Dictionary, state: Dictionary) 
 		_set_camera_zoom(camera_zoom)
 		_queue_flight_redraw()
 	)
-	set_physics_process(true)
+	simulation_scheduler.repeat(1.0, elapsed, _mark_calendar_dirty)
+	last_render_usec = Time.get_ticks_usec()
+	_sync_simulation_driver()
+	_refresh_simulation_controls()
 	set_process_unhandled_input(true)
 	_queue_flight_redraw()
 
@@ -387,8 +404,9 @@ func _restore_flight(state: Dictionary) -> void:
 	player_shield_delay = ship.shield_delay
 	iron = maxi(0, int(state.get("iron", 0)))
 	tritium = maxi(0, int(state.get("tritium", 0)))
-	elapsed = maxf(0.0, float(state.get("elapsed", 0.0)))
-	play_time = maxf(0.0, float(state.get("play_time", elapsed)))
+	if SIMULATION_CLOCK.valid_snapshot(state.get("clock")):
+		simulation_clock.restore(state.clock)
+	play_time = SAVES.play_seconds(state)
 	if state.get("ore_remaining") is Dictionary:
 		depleted_ore = state.ore_remaining
 	if state.get("velocity") is Vector2 and state.velocity.is_finite():
@@ -413,7 +431,7 @@ func _save_galaxy() -> bool:
 			"hull": ship.hull, "shield": ship.shield, "shield_delay": ship.shield_delay, "admin": ship.get("admin", {}).duplicate(true)})
 	var state := {"name": galaxy_name, "seed": galaxy_seed, "count": solar_system.systems.size(), "fleet": saved_ships,
 		"generator_version": solar_system.galaxy.generator_version, "active_ship": active_fleet_index,
-		"velocity": velocity, "iron": iron, "tritium": tritium, "elapsed": elapsed, "play_time": play_time,
+		"velocity": velocity, "iron": iron, "tritium": tritium, "clock": simulation_clock.snapshot(), "play_time": play_time,
 		"ore_remaining": depleted_ore, "world_origin": world_origin}
 	if GALAXY.is_wide_version(solar_system.galaxy.generator_version):
 		state.arms = int(solar_system.galaxy.spiral.get("arms", GALAXY.DEFAULT_ARMS))
@@ -510,6 +528,9 @@ func _set_engine_lighting(visual: ShipVisual, strength: float) -> void:
 		light.energy = strength * (0.65 + 0.08 * sin(elapsed * 19.0 + float(index) * 2.3))
 
 func _queue_flight_redraw() -> void:
+	flight_redraw_pending = true
+
+func _redraw_flight() -> void:
 	var viewport_size := get_viewport_rect().size
 	var zoom := Vector2.ONE * camera_zoom
 	var camera := _world_transform()
@@ -623,6 +644,10 @@ func _rebase_world(shift: Vector2) -> void:
 	player_fleet_body.position -= shift
 	for owned_ship in fleet:
 		owned_ship.position -= shift
+		if owned_ship.has("destination"):
+			owned_ship.destination -= shift
+		if is_instance_valid(owned_ship.get("collision_body")):
+			owned_ship.collision_body.position -= shift
 	for enemy in enemies:
 		enemy.position -= shift
 		enemy.patrol_origin -= shift
@@ -682,20 +707,47 @@ func _pan_camera(offset: Vector2) -> void:
 	camera_position = (_camera_center() + offset / camera_zoom).clamp(_world_min(), _world_max())
 	camera_following = false
 
-func _process(delta: float) -> void:
-	if game_started:
-		play_time += delta
-	if not game_started or camera_zoom == camera_zoom_target:
+func _process(_delta: float) -> void:
+	if not game_started:
 		return
-	var previous_zoom := camera_zoom
-	var zoom_blend := 1.0 - exp(-20.0 * delta)
-	camera_zoom = previous_zoom * pow(camera_zoom_target / previous_zoom, zoom_blend)
-	if absf(camera_zoom / camera_zoom_target - 1.0) < 0.001:
-		camera_zoom = camera_zoom_target
-	if not camera_following:
-		var offset := camera_zoom_focus - get_viewport_rect().size * 0.5
-		camera_position = (camera_position + offset * (1.0 / previous_zoom - 1.0 / camera_zoom)).clamp(_world_min(), _world_max())
-	_queue_flight_redraw()
+	var now := Time.get_ticks_usec()
+	var real_delta := float(now - last_render_usec) / 1000000.0
+	last_render_usec = now
+	play_time += real_delta
+	# Cap camera/audio catch-up independently of the play-time counter.
+	var presentation_delta := minf(real_delta, 0.1)
+	if not _simulation_menu_open():
+		if control_mode == 1:
+			var camera_input := Vector2(
+				Input.get_action_strength("flight_right") - Input.get_action_strength("flight_left"),
+				Input.get_action_strength("flight_back") - Input.get_action_strength("flight_forward"))
+			if camera_input != Vector2.ZERO:
+				_pan_camera(camera_input.normalized() * RTS_CAMERA_SPEED * presentation_delta)
+				_queue_flight_redraw()
+		if not simulation_clock.paused and has_flight_controls and not cached_engines.is_empty():
+			engine_audio.update_mix(engine_flame, engine_overdrive, _sustained_boost_active(), presentation_delta)
+		if not simulation_clock.paused and now - rate_sample_usec >= 1250000:
+			achieved_rate = (elapsed - rate_sample_seconds) * 1000000.0 / float(now - rate_sample_usec)
+			rate_sample_usec = now
+			rate_sample_seconds = elapsed
+			calendar_dirty = true
+	if camera_zoom != camera_zoom_target:
+		var previous_zoom := camera_zoom
+		var zoom_blend := 1.0 - exp(-20.0 * presentation_delta)
+		camera_zoom = previous_zoom * pow(camera_zoom_target / previous_zoom, zoom_blend)
+		if absf(camera_zoom / camera_zoom_target - 1.0) < 0.001:
+			camera_zoom = camera_zoom_target
+		if not camera_following:
+			var offset := camera_zoom_focus - get_viewport_rect().size * 0.5
+			camera_position = (camera_position + offset * (1.0 / previous_zoom - 1.0 / camera_zoom)).clamp(_world_min(), _world_max())
+		_queue_flight_redraw()
+	if calendar_dirty:
+		_refresh_simulation_controls()
+	if flight_redraw_pending:
+		if simulation_clock.paused and not _simulation_menu_open():
+			_maybe_rebase_world()
+		flight_redraw_pending = false
+		_redraw_flight()
 
 func _visible_world(_camera: Transform2D) -> Rect2:
 	var view_size := get_viewport_rect().size / camera_zoom
@@ -744,6 +796,89 @@ func _create_top_controls() -> void:
 	layer.add_child(hyperjump_context_button)
 	_add_top_button(layer, "hangar", -114, -72, "Hangar — choose, design, and launch ships.", _open_hangar)
 	_add_top_button(layer, "settings", -64, -22, "Settings — open the flight menu.", _open_settings)
+	_create_simulation_controls(layer)
+
+func _create_simulation_controls(layer: CanvasLayer) -> void:
+	simulation_rate_control = OptionButton.new()
+	simulation_rate_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	simulation_rate_control.offset_left = -255.0
+	simulation_rate_control.offset_right = -176.0
+	simulation_rate_control.offset_top = 22.0
+	simulation_rate_control.offset_bottom = 64.0
+	simulation_rate_control.focus_mode = Control.FOCUS_NONE
+	simulation_rate_control.tooltip_text = "Simulation speed. Camera and menus remain available while paused."
+	simulation_rate_control.add_item("Paused", 0)
+	for rate: int in SIMULATION_CLOCK.RATES:
+		simulation_rate_control.add_item("%d×" % rate, rate)
+	simulation_rate_control.item_selected.connect(func(index: int):
+		_set_simulation_rate(simulation_rate_control.get_item_id(index)))
+	layer.add_child(simulation_rate_control)
+
+	simulation_calendar = Label.new()
+	simulation_calendar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	simulation_calendar.offset_left = -540.0
+	simulation_calendar.offset_right = -267.0
+	simulation_calendar.offset_top = 22.0
+	simulation_calendar.offset_bottom = 64.0
+	simulation_calendar.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	simulation_calendar.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	simulation_calendar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	simulation_calendar.add_theme_color_override("font_shadow_color", Color.BLACK)
+	simulation_calendar.add_theme_constant_override("shadow_offset_y", 2)
+	layer.add_child(simulation_calendar)
+
+func _mark_calendar_dirty() -> void:
+	calendar_dirty = true
+
+func _refresh_simulation_controls() -> void:
+	calendar_dirty = false
+	var paused := simulation_clock.paused or _simulation_menu_open()
+	var status := ""
+	if paused:
+		status = "  ·  Paused"
+	elif achieved_rate < float(simulation_clock.rate) * 0.9:
+		status = "  ·  %.1f× actual" % achieved_rate
+	simulation_calendar.text = simulation_clock.calendar_text() + status
+	simulation_rate_control.select(simulation_rate_control.get_item_index(0 if simulation_clock.paused else simulation_clock.rate))
+
+func _set_simulation_rate(rate: int) -> void:
+	if rate != 0 and rate not in SIMULATION_CLOCK.RATES:
+		return
+	simulation_clock.paused = rate == 0
+	if simulation_clock.paused:
+		firing = false
+		boost_charging = false
+		boost_charge = 0.0
+		engine_audio.silence()
+		heritage_gun_audio.stop()
+	else:
+		simulation_clock.rate = rate
+	_sync_simulation_driver()
+
+func _simulation_menu_open() -> bool:
+	return is_instance_valid(settings_layer) or is_instance_valid(hangar_layer)
+
+func _sync_simulation_driver() -> void:
+	var running := game_started and not simulation_clock.paused and not _simulation_menu_open()
+	var rate := simulation_clock.rate if running else 1
+	var target_ticks := SIMULATION_CLOCK.TICKS_PER_SECOND * rate
+	var default_max := int(ProjectSettings.get_setting("physics/common/max_physics_steps_per_frame"))
+	var target_max := maxi(default_max, 2 * rate)
+	# Real physics-server ticks keep CharacterBody2D contacts synchronized at every rate.
+	if Engine.physics_ticks_per_second != target_ticks or Engine.max_physics_steps_per_frame != target_max:
+		changed_physics_cadence = true
+		Engine.physics_ticks_per_second = target_ticks
+		Engine.max_physics_steps_per_frame = target_max
+	set_physics_process(running)
+	rate_sample_usec = Time.get_ticks_usec()
+	rate_sample_seconds = elapsed
+	achieved_rate = float(simulation_clock.rate)
+	_mark_calendar_dirty()
+
+func _exit_tree() -> void:
+	if changed_physics_cadence:
+		Engine.physics_ticks_per_second = int(ProjectSettings.get_setting("physics/common/physics_ticks_per_second"))
+		Engine.max_physics_steps_per_frame = int(ProjectSettings.get_setting("physics/common/max_physics_steps_per_frame"))
 
 func _add_top_button(layer: CanvasLayer, label: String, left: float, right: float, tooltip: String, action: Callable) -> Button:
 	var button := preload("res://scripts/hud_icon_button.gd").new()
@@ -1207,13 +1342,13 @@ func _open_settings() -> void:
 		home_menu.set_process_unhandled_input(false)
 	boost_charging = false
 	boost_charge = 0.0
-	set_physics_process(false)
 	engine_audio.silence()
 	heritage_gun_audio.stop()
 	set_process_unhandled_input(false)
 	settings_layer = CanvasLayer.new()
 	settings_layer.layer = 20
 	add_child(settings_layer)
+	_sync_simulation_driver()
 	var menu := SETTINGS_MENU.new()
 	menu.in_flight = game_started
 	if game_started:
@@ -1278,7 +1413,7 @@ func _close_settings() -> void:
 	settings_layer.queue_free()
 	settings_layer = null
 	if game_started:
-		set_physics_process(true)
+		_sync_simulation_driver()
 		set_process_unhandled_input(true)
 	else:
 		home_menu.set_process_unhandled_input(true)
@@ -1316,11 +1451,11 @@ func _open_hangar() -> void:
 	boost_charge = 0.0
 	engine_audio.silence()
 	heritage_gun_audio.stop()
-	set_physics_process(false)
 	set_process_unhandled_input(false)
 	hangar_layer = CanvasLayer.new()
 	hangar_layer.layer = 20
 	add_child(hangar_layer)
+	_sync_simulation_driver()
 	_save_active_fleet_ship()
 	var hangar := HANGAR.new()
 	hangar.current_parts = custom_parts.duplicate(true)
@@ -1340,7 +1475,7 @@ func _close_hangar() -> void:
 		return
 	hangar_layer.queue_free()
 	hangar_layer = null
-	set_physics_process(true)
+	_sync_simulation_driver()
 	set_process_unhandled_input(true)
 
 func _deploy_custom_ship(parts: Array) -> void:
@@ -2528,17 +2663,18 @@ func _update_rts_flight(speed_limit: float, ship_acceleration: float, ship_turn_
 	var correction := braking_acceleration + (ship_acceleration - braking_acceleration) * thrust
 	velocity = _navigation_velocity(velocity, forward, course, minf(speed_limit, arrival_speed), correction, delta)
 
-func _physics_process(delta: float) -> void:
-	elapsed += delta
+func _physics_process(_real_step: float) -> void:
+	if simulation_clock.paused or _simulation_menu_open():
+		return
+	simulation_clock.advance()
+	_step_flight(SIMULATION_CLOCK.STEP)
+	simulation_scheduler.run_due(elapsed)
+	_queue_flight_redraw()
+
+func _step_flight(delta: float) -> void:
 	_update_owned_fleet(delta)
 	engine_throttle_target = 0.0
 	engine_boost_target = 0.0
-	if control_mode == 1:
-		var camera_input := Vector2(
-			Input.get_action_strength("flight_right") - Input.get_action_strength("flight_left"),
-			Input.get_action_strength("flight_back") - Input.get_action_strength("flight_forward"))
-		if camera_input != Vector2.ZERO:
-			_pan_camera(camera_input.normalized() * RTS_CAMERA_SPEED * delta)
 	if control_mode == 1 or rts_attack_active:
 		var valid_enemy: bool = selected_enemy >= 0 and selected_enemy < enemies.size() and enemies[selected_enemy].alive
 		var valid_asteroid: bool = selected_asteroid >= 0 and selected_asteroid < asteroids.size() and asteroids[selected_asteroid].iron > 0
@@ -2634,9 +2770,6 @@ func _physics_process(delta: float) -> void:
 	_update_debris(delta)
 	_update_player_exhaust(delta)
 	_update_exhaust_particles(delta)
-	if has_flight_controls and not cached_engines.is_empty():
-		engine_audio.update_mix(engine_flame, engine_overdrive, _sustained_boost_active(), delta)
-	_queue_flight_redraw()
 
 func _update_owned_fleet(delta: float) -> void:
 	player_fleet_body.position = ship_position

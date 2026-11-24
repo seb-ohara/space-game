@@ -3,14 +3,15 @@ extends RefCounted
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const SAVE_DIR := "user://galaxies"
 const EXTENSION := ".save"
-const FORMAT_VERSION := 1
+const FORMAT_VERSION := 2
+const CLOCK := preload("res://scripts/simulation/simulation_clock.gd")
 const RECENT_PATH := "user://recent_galaxy.cfg"
 
 static func new_id() -> String:
 	return "%d-%08x" % [int(Time.get_unix_time_from_system() * 1000.0), randi()]
 
 static func write(slot_id: String, state: Dictionary) -> bool:
-	if not _valid_id(slot_id) or DirAccess.make_dir_recursive_absolute(SAVE_DIR) != OK:
+	if not _valid_id(slot_id) or not CLOCK.valid_snapshot(state.get("clock")) or DirAccess.make_dir_recursive_absolute(SAVE_DIR) != OK:
 		return false
 	var path := SAVE_DIR.path_join(slot_id + EXTENSION)
 	var temporary := path + ".tmp"
@@ -38,8 +39,15 @@ static func read(slot_id: String) -> Dictionary:
 	var data: Variant = file.get_var(false)
 	if file.get_error() != OK or not data is Dictionary:
 		return {}
-	if data.get("format_version") != FORMAT_VERSION:
+	var format: Variant = data.get("format_version")
+	if format == 1:
+		var legacy_time: Variant = data.get("elapsed", 0.0)
+		data.clock = {"seconds": _nonnegative_seconds(legacy_time), "rate": 1, "paused": false}
+		if not CLOCK.valid_snapshot(data.clock):
+			data.clock.seconds = 0.0
+	elif format != FORMAT_VERSION or not CLOCK.valid_snapshot(data.get("clock")):
 		return {}
+	data.play_time = play_seconds(data)
 	if not data.get("name") is String or not data.get("seed") is int or not data.get("count") is int:
 		return {}
 	var version: Variant = data.get("generator_version")
@@ -67,7 +75,7 @@ static func slots() -> Array[Dictionary]:
 		var path := SAVE_DIR.path_join(filename)
 		results.append({"id": slot_id, "name": saved.get("name", "Unreadable save"), "count": saved.get("count", 0),
 			"seed": saved.get("seed"), "saved_at": FileAccess.get_modified_time(path), "readable": not saved.is_empty(),
-			"play_time": maxf(0.0, float(saved.get("play_time", saved.get("elapsed", 0.0))))})
+			"play_time": play_seconds(saved)})
 	results.sort_custom(func(a: Dictionary, b: Dictionary): return a.saved_at > b.saved_at)
 	return results
 
@@ -96,6 +104,12 @@ static func delete(slot_id: String) -> bool:
 		return false
 	var path := SAVE_DIR.path_join(slot_id + EXTENSION)
 	return FileAccess.file_exists(path) and DirAccess.remove_absolute(path) == OK
+
+static func play_seconds(state: Dictionary) -> float:
+	return _nonnegative_seconds(state.get("play_time", state.get("clock", {}).get("seconds", 0.0)))
+
+static func _nonnegative_seconds(value: Variant) -> float:
+	return maxf(0.0, float(value)) if (value is int or value is float) and is_finite(value) else 0.0
 
 static func _valid_id(slot_id: String) -> bool:
 	return not slot_id.is_empty() and slot_id.is_valid_filename() and not slot_id.begins_with(".")

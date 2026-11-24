@@ -97,15 +97,19 @@ Weapon groups are laser, mining laser, machine gun, rocket and railgun. Turrets 
 
 **Current limitation:** `ENEMY_SHIPS_ENABLED` is `false` in `game.gd`, so enemy waves are not enabled by default. Combat code should be described as implemented infrastructure rather than an active, fully populated enemy gameplay loop. Visual effects include exhaust, engine lighting and sound, weapon flashes, shield glow and impacts.
 
+## Simulation clock
+
+The in-flight top-right toolbar shows a galactic date and Paused/1×/2×/5×/10× controls. The authoritative simulation clock advances in 1/60 simulated-second ticks. Accelerated rates change Godot's physics tick cadence, not `Engine.time_scale` or the size of a gameplay step. Orbits, movement, mining and combat read simulation time; camera, presentation and session play time run separately. Settings and hangar pause simulation temporarily without changing the selected speed or manual pause state. If the engine cannot sustain the selected rate within its step budget, the calendar reports the achieved rate.
+
 ## Saves and settings
 
-Galaxy saves use Godot's `user://galaxies` directory, one `.save` file per slot, with a temporary-file write and rename. The save includes name, seed, system count, generator version and arm count where applicable; fleet designs and positions, active ship, hull/shield data and administration; active velocity; iron and tritium; elapsed/play time; depleted ore; floating world origin; and an in-progress hyperjump if applicable. Galaxy layout and contents are regenerated deterministically from the saved generation parameters rather than relying on a fully serialized universe. The save reader validates format, version and key parameters; recent and load/delete UI is provided. Saves happen at creation, through settings, on relevant admin changes and on window close. Do not assume that transient projectiles, enemies, every fleet movement order or all visual effects survive a reload.
+Galaxy saves use Godot's `user://galaxies` directory, one `.save` file per slot, with a temporary-file write and rename. The save includes name, seed, system count, generator version and arm count where applicable; fleet designs and positions, active ship, hull/shield data and administration; active velocity; iron and tritium; simulation time, speed, manual pause and real session play time; depleted ore; floating world origin; and an in-progress hyperjump if applicable. Galaxy layout and contents are regenerated deterministically from the saved generation parameters rather than relying on a fully serialized universe. The save reader validates format, version and key parameters. It opens format 1 saves at 1× unpaused with their prior elapsed time, then writes format 2 on the next save. Recent and load/delete UI is provided. Saves happen at creation, through settings, on relevant admin changes and on window close. Do not assume that transient projectiles, enemies, every fleet movement order or all visual effects survive a reload.
 
 Settings include control mode, key bindings and graphics/display options such as graphics quality, frame cap and VSync. They are stored separately from galaxy saves.
 
 ## Living-universe roadmap status
 
-Phase 0 is complete: [architecture audit, benchmark results and Phase 1 plan](LIVING_UNIVERSE_PHASE_0.md). No gameplay code changed. `tests/flight_persistence_test.gd` covers rebasing, parked RTS movement and save/reload during active hyperjump; `tests/galaxy_baseline_benchmark.gd` measures the current callback at 100, 250, 500 and 1,000 systems. The game still runs at 1× with no universal clock or scheduler; Phase 1 has not started.
+Phase 0 ([architecture audit and baseline](LIVING_UNIVERSE_PHASE_0.md)) and Phase 1 ([simulation clock and verification](LIVING_UNIVERSE_PHASE_1.md)) are complete. Regression coverage includes time-speed parity, ship contacts, rebasing, and legacy and current saves during hyperjump. The measured 1,000-system, one-ship prototype sustained 10× on Apple M4; this does not establish throughput for a populated galaxy or other hardware. Phase 2 (node-independent entity and ship state) has not started.
 
 ## Guidance for future development
 

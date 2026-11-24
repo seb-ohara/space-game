@@ -59,7 +59,7 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.is_action("boost_recenter") and not event.echo and game.control_mode == 0 and game.hyperjump_time < 0.0:
 		game._ensure_ship_cache()
-		if game.has_flight_controls and not is_instance_valid(game.settings_layer):
+		if game.has_flight_controls and not game.simulation_clock.paused and not is_instance_valid(game.settings_layer):
 			if game.sustained_boost_enabled:
 				if event.pressed:
 					game._set_sustained_boost(false)
@@ -71,7 +71,7 @@ func _input(event: InputEvent) -> void:
 			game.get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.is_action("fire") and not event.echo and game.control_mode == 0 and not is_instance_valid(game.settings_layer):
-		game.firing = event.pressed and not game._combat_locked()
+		game.firing = event.pressed and not game.simulation_clock.paused and not game._combat_locked()
 		game.get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:

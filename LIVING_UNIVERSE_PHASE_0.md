@@ -1,6 +1,6 @@
 # Drift living universe — Phase 0 audit and Phase 1 plan
 
-Audited gameplay baseline: `d8af418`. Phase 0 adds tests, a benchmark and documentation only. Phases 1–17 have not been implemented.
+Audited gameplay baseline: `d8af418`. This is the Phase 0 snapshot; it added tests, a benchmark and documentation only. For later changes see [Phase 1 implementation and verification](LIVING_UNIVERSE_PHASE_1.md). The original benchmark script and Phase 0 fixtures are at checkpoint `0459209`.
 
 ## Current architecture and integration points
 
@@ -49,7 +49,7 @@ godot --headless --path . --fixed-fps 60 --quit-after 600 --script res://tests/g
 
 Confirm each script prints its success marker without script/assertion errors; the iteration watchdog alone does not guarantee success.
 
-## Phase 1 implementation plan (not started)
+## Original Phase 1 implementation plan
 
 1. **Introduce an authoritative clock and cadence.** Add a small `scripts/simulation/simulation_clock.gd` with total simulated seconds, fixed 1/60 steps, bounded pending time, pause and the requested rates (0/1/2/5/10). Use a small simulation-time interval scheduler for genuinely lower-frequency work, not a wall-clock timer and not a place to move collision or mining prematurely. Keep `Engine.time_scale` at 1. Start with one simulation second per real second at 1× and a calendar with a documented epoch, 365-day years and 24-hour days; display sub-hour detail if needed so new games visibly tick. Preserve generated orbit periods and presentation multipliers, independently of calendar formatting.
 2. **Separate one precise gameplay step from presentation.** In `game.gd`, extract the existing movement/mining/combat/rebase ordering into a fixed-step method before adding extra steps per callback. Route all game-affecting deltas and timestamps to the clock; switch `solar_system.gd`'s elapsed input, combat timestamps and HUD reads without maintaining a second authoritative elapsed counter. Update camera input/smoothing, redraw submission and audio mix on real cadence. Keep asteroid availability and collision resolution in the simulation path; test that moved presentation has not altered gameplay. Cache per-system work only where profiling justifies it.

@@ -37,7 +37,7 @@ func _run() -> void:
 	game.galaxy_name = "Flight regression"
 	game.save_slot = SAVES.new_id()
 	game.play_time = 120.0
-	game.elapsed = 30.0
+	game.simulation_clock.restore({"seconds": 30.0, "rate": 1, "paused": false})
 	game.iron = 4
 	game.tritium = 3
 	assert(not game.asteroids.is_empty())
@@ -47,19 +47,22 @@ func _run() -> void:
 
 	# Rebase without changing the relative ship or rock positions.
 	var wing_offset: Vector2 = game.fleet[1].position - game.ship_position
+	var wing_course := Vector2.from_angle(game.fleet[1].heading)
+	var wing_leg := wing_course * 10000.0
+	game.fleet[1].destination = game.fleet[1].position + wing_leg
 	var rock_offset: Vector2 = game.asteroids[0].position - game.ship_position
 	var shift := Vector2(1024, -2048)
 	game._rebase_world(shift)
 	assert(game.world_origin == origin + shift)
 	assert(game.fleet[1].position - game.ship_position == wing_offset)
+	assert((game.fleet[1].destination - game.fleet[1].position as Vector2).is_equal_approx(wing_leg))
+	assert(game.fleet[1].collision_body.position == game.fleet[1].position)
 	assert((game.asteroids[0].position - game.ship_position).is_equal_approx(rock_offset))
 
 	# Use a real physics-frame context for CharacterBody2D movement.
 	await physics_frame
 	var wing: Dictionary = game.fleet[1]
 	var wing_start: Vector2 = wing.position
-	var wing_course := Vector2.from_angle(wing.heading)
-	wing.destination = wing_start + wing_course * 10000.0
 	wing.move_active = true
 	for tick in range(10):
 		game._update_owned_fleet(STEP)
@@ -73,10 +76,13 @@ func _run() -> void:
 	assert(game.ship_position != position_before and game.velocity.length() > 0.0)
 	assert(is_equal_approx(game.elapsed, 30.5) and game.play_time == 120.0)
 	assert(game.player_shield == 20.0 and is_equal_approx(game.player_shield_delay, 1.5))
+	game._set_simulation_rate(5)
+	game._set_simulation_rate(0)
 	assert(game._save_galaxy())
 	var slot_id: String = game.save_slot
 	var saved := SAVES.read(slot_id)
-	assert(saved.format_version == 1 and saved.generator_version == GALAXY.VERSION)
+	assert(saved.format_version == 2 and saved.generator_version == GALAXY.VERSION)
+	assert(saved.clock == game.simulation_clock.snapshot())
 	assert(saved.active_ship == 0 and saved.fleet.size() == 2)
 	assert(saved.jump.destination == 1 and saved.jump.arrival == game.hyperjump_arrival)
 
@@ -100,14 +106,51 @@ func _run() -> void:
 			restored_rock = asteroid.iron == remaining
 			break
 	assert(restored_rock)
+	assert(restored.simulation_clock.rate == 5 and restored.simulation_clock.paused and not restored.is_physics_processing())
 	restored._physics_process(STEP)
+	assert(restored.elapsed == saved.clock.seconds and restored.ship_position == saved.fleet[0].position)
+	restored._set_simulation_rate(5)
+	restored._physics_process(STEP / 5.0)
 	assert(restored.ship_position != saved.fleet[0].position and restored.hyperjump_time > 0.0)
+	assert(is_equal_approx(restored.elapsed, saved.clock.seconds + STEP))
+	restored._set_simulation_rate(0)
+
+	# Write a genuine v1 payload with the old field names, not through the v2 writer.
+	var old_id := SAVES.new_id()
+	var old_save := saved.duplicate(true)
+	old_save.format_version = 1
+	old_save.elapsed = saved.clock.seconds
+	old_save.erase("clock")
+	old_save.erase("play_time")
+	_write_fixture(old_id, old_save)
+	var migrated := SAVES.read(old_id)
+	assert(migrated.clock == {"seconds": saved.clock.seconds, "rate": 1, "paused": false})
+	assert(migrated.play_time == saved.clock.seconds and migrated.jump == saved.jump)
+	var legacy := FLIGHT.instantiate()
+	root.add_child(legacy)
+	legacy._load_game(old_id)
+	legacy.set_physics_process(false)
+	assert(legacy.game_started and legacy.elapsed == old_save.elapsed and not legacy.simulation_clock.paused)
+	assert(legacy.hyperjump_arrival == restored.hyperjump_arrival and legacy.world_origin == restored.world_origin)
+	var invalid := saved.duplicate(true)
+	invalid.clock.rate = 3
+	assert(not SAVES.write(old_id, invalid))
+	_write_fixture(old_id, invalid)
+	assert(SAVES.read(old_id).is_empty())
 
 	game.free()
 	restored.free()
+	legacy.free()
+	assert(SAVES.delete(old_id))
 	assert(SAVES.delete(slot_id))
 	assert(DirAccess.remove_absolute(SAVES.RECENT_PATH) == OK)
 	assert(DirAccess.remove_absolute(SAVES.SAVE_DIR) == OK)
 	assert(DirAccess.remove_absolute(test_dir) == OK)
 	print("Flight persistence checks passed")
 	quit()
+
+func _write_fixture(slot_id: String, state: Dictionary) -> void:
+	var file := FileAccess.open(SAVES.SAVE_DIR.path_join(slot_id + SAVES.EXTENSION), FileAccess.WRITE)
+	assert(file != null)
+	file.store_var(state)
+	file.close()

@@ -6,19 +6,22 @@ const FLIGHT := preload("res://main.tscn")
 const SEED := 7419
 const SAMPLES := 3
 const WARMUP_TICKS := 30
-const MEASURED_TICKS := 180
+const TICKS_PER_BATCH := 10
+const BATCHES := 18
+const MEASURED_TICKS := TICKS_PER_BATCH * BATCHES
 const STEP := 1.0 / 60.0
 
 func _initialize() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
-	print("systems,map_ms,formation_ms,flight_init_ms,flight_tick_mean_ms")
+	print("systems,map_ms,formation_ms,flight_init_ms,flight_tick_mean_ms,presentation_mean_ms")
 	for count in [100, 250, 500, 1000]:
 		var map_times: Array[float] = []
 		var formation_times: Array[float] = []
 		var init_times: Array[float] = []
 		var tick_times: Array[float] = []
+		var presentation_times: Array[float] = []
 		for sample in range(SAMPLES):
 			var start := Time.get_ticks_usec()
 			var map := GALAXY.create_map(SEED, count)
@@ -42,6 +45,7 @@ func _run() -> void:
 			}]}
 			start = Time.get_ticks_usec()
 			game._start_flight(map, contents, state)
+			game._redraw_flight()
 			init_times.append(float(Time.get_ticks_usec() - start) / 1000.0)
 			game.set_physics_process(false)
 			game.set_process(false)
@@ -50,15 +54,24 @@ func _run() -> void:
 			await physics_frame
 			for tick in range(WARMUP_TICKS):
 				game._physics_process(STEP)
-			start = Time.get_ticks_usec()
-			for tick in range(MEASURED_TICKS):
-				game._physics_process(STEP)
-			tick_times.append(float(Time.get_ticks_usec() - start) / (MEASURED_TICKS * 1000.0))
+			var tick_usec := 0
+			var presentation_usec := 0
+			# Sample a redraw after each ten ticks, as at 10× and 60 FPS.
+			for batch in range(BATCHES):
+				start = Time.get_ticks_usec()
+				for tick in range(TICKS_PER_BATCH):
+					game._physics_process(STEP)
+				tick_usec += Time.get_ticks_usec() - start
+				start = Time.get_ticks_usec()
+				game._redraw_flight()
+				presentation_usec += Time.get_ticks_usec() - start
+			tick_times.append(float(tick_usec) / (MEASURED_TICKS * 1000.0))
+			presentation_times.append(float(presentation_usec) / (BATCHES * 1000.0))
 			assert(game.ship_position != Vector2.ZERO)
 			game.free()
 			await process_frame
-		print("%d,%.3f,%.3f,%.3f,%.3f" % [count, _median(map_times), _median(formation_times),
-			_median(init_times), _median(tick_times)])
+		print("%d,%.3f,%.3f,%.3f,%.3f,%.3f" % [count, _median(map_times), _median(formation_times),
+			_median(init_times), _median(tick_times), _median(presentation_times)])
 	print("Galaxy baseline benchmark complete")
 	quit()
 
