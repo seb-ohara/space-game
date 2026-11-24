@@ -103,6 +103,10 @@ Galaxy saves use Godot's `user://galaxies` directory, one `.save` file per slot,
 
 Settings include control mode, key bindings and graphics/display options such as graphics quality, frame cap and VSync. They are stored separately from galaxy saves.
 
+## Living-universe roadmap status
+
+Phase 0 is complete: [architecture audit, benchmark results and Phase 1 plan](LIVING_UNIVERSE_PHASE_0.md). No gameplay code changed. `tests/flight_persistence_test.gd` covers rebasing, parked RTS movement and save/reload during active hyperjump; `tests/galaxy_baseline_benchmark.gd` measures the current callback at 100, 250, 500 and 1,000 systems. The game still runs at 1× with no universal clock or scheduler; Phase 1 has not started.
+
 ## Guidance for future development
 
 - Treat this document as a snapshot; check the actual source before changing a formula or assuming a feature is exposed in the UI.
