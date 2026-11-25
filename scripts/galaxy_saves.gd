@@ -3,7 +3,7 @@ extends RefCounted
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const SAVE_DIR := "user://galaxies"
 const EXTENSION := ".save"
-const FORMAT_VERSION := 2
+const FORMAT_VERSION := 3
 const CLOCK := preload("res://scripts/simulation/simulation_clock.gd")
 const RECENT_PATH := "user://recent_galaxy.cfg"
 
@@ -45,7 +45,7 @@ static func read(slot_id: String) -> Dictionary:
 		data.clock = {"seconds": _nonnegative_seconds(legacy_time), "rate": 1, "paused": false}
 		if not CLOCK.valid_snapshot(data.clock):
 			data.clock.seconds = 0.0
-	elif format != FORMAT_VERSION or not CLOCK.valid_snapshot(data.get("clock")):
+	elif format not in [2, FORMAT_VERSION] or not CLOCK.valid_snapshot(data.get("clock")):
 		return {}
 	data.play_time = play_seconds(data)
 	if not data.get("name") is String or not data.get("seed") is int or not data.get("count") is int:

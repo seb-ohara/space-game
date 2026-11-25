@@ -27,8 +27,10 @@ func _draw_hud(size: Vector2) -> void:
 	var chart = Transform2D(0.0, Vector2.ONE * chart_scale, 0.0, map_rect.get_center() - chart_bounds.get_center() * chart_scale)
 	game.solar_system.draw_minimap(game, chart)
 	for i in range(game.fleet.size()):
-		if i != game.active_fleet_index and chart_bounds.has_point(game.fleet[i].position):
-			game.draw_circle(chart * game.fleet[i].position, 3.0, Color("87e5bf"))
+		if i != game.active_fleet_index:
+			var position: Vector2 = game._ship_local(game.fleet[i])
+			if chart_bounds.has_point(position):
+				game.draw_circle(chart * position, 3.0, Color("87e5bf"))
 	var view_size = size / game.camera_zoom
 	var camera_view = Rect2(game._camera_center() - view_size * 0.5, view_size).intersection(chart_bounds)
 	if camera_view.has_area():

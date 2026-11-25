@@ -3,6 +3,7 @@ extends SceneTree
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const MODULES := preload("res://scripts/ship_modules.gd")
 const SAVES := preload("res://scripts/galaxy_saves.gd")
+const SHIP_STATE := preload("res://scripts/ships/ship_state.gd")
 const FLIGHT := preload("res://main.tscn")
 const SEED := 7419
 const STEP := 1.0 / 60.0
@@ -46,27 +47,28 @@ func _run() -> void:
 	game.depleted_ore[rock_id] = remaining
 
 	# Rebase without changing the relative ship or rock positions.
-	var wing_offset: Vector2 = game.fleet[1].position - game.ship_position
-	var wing_course := Vector2.from_angle(game.fleet[1].heading)
+	var wing: Dictionary = game.fleet[1]
+	var wing_position: PackedFloat64Array = wing.galaxy_position
+	var wing_offset: Vector2 = game._ship_local(wing) - game.ship_position
+	var wing_course := Vector2.from_angle(wing.heading)
 	var wing_leg := wing_course * 10000.0
-	game.fleet[1].destination = game.fleet[1].position + wing_leg
+	wing.navigation = {"mode": "move", "target": SHIP_STATE.absolute(wing_position, wing_leg)}
+	var wing_target: PackedFloat64Array = wing.navigation.target
 	var rock_offset: Vector2 = game.asteroids[0].position - game.ship_position
 	var shift := Vector2(1024, -2048)
 	game._rebase_world(shift)
 	assert(game.world_origin == origin + shift)
-	assert(game.fleet[1].position - game.ship_position == wing_offset)
-	assert((game.fleet[1].destination - game.fleet[1].position as Vector2).is_equal_approx(wing_leg))
-	assert(game.fleet[1].collision_body.position == game.fleet[1].position)
+	assert(game._ship_local(wing) - game.ship_position == wing_offset)
+	assert(wing.galaxy_position == wing_position and wing.navigation.target == wing_target)
+	assert(game.fleet_views[wing.id].body.position == game._ship_local(wing))
 	assert((game.asteroids[0].position - game.ship_position).is_equal_approx(rock_offset))
 
 	# Use a real physics-frame context for CharacterBody2D movement.
 	await physics_frame
-	var wing: Dictionary = game.fleet[1]
-	var wing_start: Vector2 = wing.position
-	wing.move_active = true
+	var wing_start: Vector2 = game._ship_local(wing)
 	for tick in range(10):
 		game._update_owned_fleet(STEP)
-	assert(wing.move_active and (wing.position - wing_start).dot(wing_course) > 0.0)
+	assert(wing.navigation.mode == "move" and (game._ship_local(wing) - wing_start).dot(wing_course) > 0.0)
 	game._execute_hyperjump(0, 1)
 	assert(game.hyperjump_time >= 0.0 and game.hyperjump_destination == 1)
 	var position_before: Vector2 = game.ship_position
@@ -81,10 +83,11 @@ func _run() -> void:
 	assert(game._save_galaxy())
 	var slot_id: String = game.save_slot
 	var saved := SAVES.read(slot_id)
-	assert(saved.format_version == 2 and saved.generator_version == GALAXY.VERSION)
+	assert(saved.format_version == 3 and saved.generator_version == GALAXY.VERSION)
 	assert(saved.clock == game.simulation_clock.snapshot())
-	assert(saved.active_ship == 0 and saved.fleet.size() == 2)
-	assert(saved.jump.destination == 1 and saved.jump.arrival == game.hyperjump_arrival)
+	assert(saved.active_ship_id == game.fleet[0].id and saved.fleet.size() == 2)
+	var jump: Dictionary = saved.fleet[0].navigation
+	assert(jump.system == 1 and jump.target == game.hyperjump_galaxy_target)
 
 	var restored := FLIGHT.instantiate()
 	root.add_child(restored)
@@ -94,7 +97,8 @@ func _run() -> void:
 	restored.engine_audio.volume = 0.0
 	assert(restored.game_started and restored.world_origin == game.world_origin)
 	assert(restored.ship_position == game.ship_position and restored.velocity == game.velocity)
-	assert(restored.fleet[1].position == game.fleet[1].position and restored.fleet[1].hull == 57.0)
+	assert(restored.fleet[1].galaxy_position == wing.galaxy_position and restored.fleet[1].hull == 57.0)
+	assert(restored.fleet[1].navigation == wing.navigation and restored.fleet[1].velocity == wing.velocity)
 	assert(restored.elapsed == game.elapsed and restored.play_time == game.play_time)
 	assert(restored.iron == 4 and restored.tritium == 3)
 	assert(restored.player_shield == game.player_shield and restored.player_shield_delay == game.player_shield_delay)
@@ -108,10 +112,10 @@ func _run() -> void:
 	assert(restored_rock)
 	assert(restored.simulation_clock.rate == 5 and restored.simulation_clock.paused and not restored.is_physics_processing())
 	restored._physics_process(STEP)
-	assert(restored.elapsed == saved.clock.seconds and restored.ship_position == saved.fleet[0].position)
+	assert(restored.elapsed == saved.clock.seconds and restored.ship_position == game.ship_position)
 	restored._set_simulation_rate(5)
 	restored._physics_process(STEP / 5.0)
-	assert(restored.ship_position != saved.fleet[0].position and restored.hyperjump_time > 0.0)
+	assert(restored.ship_position != game.ship_position and restored.hyperjump_time > jump.time)
 	assert(is_equal_approx(restored.elapsed, saved.clock.seconds + STEP))
 	restored._set_simulation_rate(0)
 
@@ -120,18 +124,35 @@ func _run() -> void:
 	var old_save := saved.duplicate(true)
 	old_save.format_version = 1
 	old_save.elapsed = saved.clock.seconds
+	old_save.world_origin = game.world_origin
+	old_save.active_ship = 0
+	old_save.velocity = game.velocity
+	old_save.iron = game.iron
+	old_save.tritium = game.tritium
+	old_save.jump = {"destination": jump.system, "arrival": game.hyperjump_arrival, "distance": jump.distance}
+	old_save.fleet = initial.fleet.duplicate(true)
+	old_save.fleet[0].position = game.ship_position
+	old_save.fleet[0].heading = game.heading
+	old_save.erase("galaxy_origin")
+	old_save.erase("active_ship_id")
+	old_save.erase("next_ship_id")
 	old_save.erase("clock")
 	old_save.erase("play_time")
 	_write_fixture(old_id, old_save)
 	var migrated := SAVES.read(old_id)
 	assert(migrated.clock == {"seconds": saved.clock.seconds, "rate": 1, "paused": false})
-	assert(migrated.play_time == saved.clock.seconds and migrated.jump == saved.jump)
+	assert(migrated.play_time == saved.clock.seconds and migrated.jump == old_save.jump)
 	var legacy := FLIGHT.instantiate()
 	root.add_child(legacy)
 	legacy._load_game(old_id)
 	legacy.set_physics_process(false)
 	assert(legacy.game_started and legacy.elapsed == old_save.elapsed and not legacy.simulation_clock.paused)
 	assert(legacy.hyperjump_arrival == restored.hyperjump_arrival and legacy.world_origin == restored.world_origin)
+	assert(legacy.fleet[0].id == saved.active_ship_id and legacy.fleet[0].cargo.iron == 4 and legacy.fleet[1].cargo.iron == 0)
+	old_save.format_version = 2
+	old_save.clock = saved.clock
+	_write_fixture(old_id, old_save)
+	assert(SAVES.read(old_id).clock == saved.clock)
 	var invalid := saved.duplicate(true)
 	invalid.clock.rate = 3
 	assert(not SAVES.write(old_id, invalid))
