@@ -84,7 +84,7 @@ func _run() -> void:
 	assert(game._save_galaxy())
 	var slot_id: String = game.save_slot
 	var saved := SAVES.read(slot_id)
-	assert(saved.format_version == 3 and saved.generator_version == GALAXY.VERSION)
+	assert(saved.format_version == 4 and saved.generator_version == GALAXY.VERSION)
 	assert(saved.clock == game.simulation_clock.snapshot())
 	assert(saved.active_ship_id == game.fleet[0].id and saved.fleet.size() == 2)
 	var jump: Dictionary = saved.fleet[0].navigation
@@ -155,6 +155,19 @@ func _run() -> void:
 	old_save.clock = saved.clock
 	_write_fixture(old_id, old_save)
 	assert(SAVES.read(old_id).clock == saved.clock)
+	var phase_two := saved.duplicate(true)
+	phase_two.format_version = 3
+	for record: Dictionary in phase_two.fleet:
+		for field: String in SHIP_STATE.ORDER_DEFAULTS:
+			record.erase(field)
+	_write_fixture(old_id, phase_two)
+	var migrated_fleet := FLIGHT.instantiate()
+	root.add_child(migrated_fleet)
+	migrated_fleet._load_game(old_id)
+	assert(migrated_fleet.fleet[0].orders.size() == 1 and migrated_fleet.fleet[0].orders[0].stage == "jump")
+	assert(migrated_fleet.fleet[1].orders.size() == 1 and migrated_fleet.fleet[1].orders[0].type == "move")
+	assert(migrated_fleet.fleet[0].id == saved.active_ship_id and migrated_fleet.fleet[0].navigation == jump)
+	migrated_fleet.free()
 	var invalid := saved.duplicate(true)
 	invalid.clock.rate = 3
 	assert(not SAVES.write(old_id, invalid))

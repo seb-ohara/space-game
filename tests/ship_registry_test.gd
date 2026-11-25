@@ -54,7 +54,7 @@ func _run() -> void:
 	var jump_time: float = pilot.navigation.time
 	game._switch_fleet_control(0)
 	assert(game.hyperjump_time == jump_time and game.iron == 3)
-	assert(STATE.snapshot(wing).size() == STATE.FIELDS.size() and not wing.has("collision_body"))
+	assert(STATE.snapshot(wing).size() == STATE.FIELDS.size() + STATE.ORDER_DEFAULTS.size() and not wing.has("collision_body"))
 	game.free()
 	print("Ship registry checks passed")
 	quit()

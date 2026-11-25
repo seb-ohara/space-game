@@ -1,6 +1,8 @@
 extends RefCounted
 ## Stateless flight calculations shared by player and fleet navigation.
 
+const MOVE_ARRIVAL_RADIUS := 4.0
+
 static func navigation_velocity(current: Vector2, forward: Vector2, course: Vector2, target_speed: float, acceleration: float, delta: float) -> Vector2:
 	# Navigation can brake drift, but main engines only accelerate forwards.
 	var alignment := forward.dot(course)
@@ -18,7 +20,7 @@ static func navigation_velocity(current: Vector2, forward: Vector2, course: Vect
 ## modify the order; the ship owner applies the result and handles collisions.
 static func move_order_step(position: Vector2, heading: float, velocity: Vector2, destination: Vector2, speed_limit: float, acceleration: float, max_turn_rate: float, approach_rate: float, delta: float) -> Dictionary:
 	var offset := destination - position
-	if offset.length() <= 4.0:
+	if offset.length() <= MOVE_ARRIVAL_RADIUS:
 		return {"arrived": true, "heading": heading, "velocity": Vector2.ZERO, "engine_target": 0.0}
 	var next_heading := rotate_toward(heading, offset.angle(), max_turn_rate * delta)
 	var course := offset.normalized()

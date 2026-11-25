@@ -2,9 +2,10 @@ extends RefCounted
 ## Portable ship records. Position/targets are two double-precision galaxy coordinates.
 
 const OWNER_PLAYER := "player"
-const MODES := ["idle", "drift", "move", "jump", "boost", "burst", "decelerate"]
+const MODES := ["idle", "hold", "drift", "move", "jump", "boost", "burst", "decelerate"]
 const FIELDS := ["id", "owner_id", "design_id", "name", "parts", "admin", "galaxy_position", "velocity",
 	"heading", "angular_velocity", "hull", "shield", "shield_delay", "cargo", "navigation"]
+const ORDER_DEFAULTS := {"orders": [], "next_order_id": 1, "last_order": {}}
 
 static func point(x: float, y: float) -> PackedFloat64Array:
 	return PackedFloat64Array([x, y])
@@ -29,12 +30,15 @@ static func from_legacy(source: Dictionary, id: String, origin: PackedFloat64Arr
 		"parts": source.parts.duplicate(true), "admin": source.get("admin", {}).duplicate(true),
 		"galaxy_position": absolute(origin, source.position), "velocity": Vector2.ZERO,
 		"heading": source.heading, "angular_velocity": 0.0, "hull": source.hull, "shield": source.shield,
-		"shield_delay": source.shield_delay, "cargo": {"iron": 0, "tritium": 0}, "navigation": {"mode": "idle"}}
+		"shield_delay": source.shield_delay, "cargo": {"iron": 0, "tritium": 0}, "navigation": {"mode": "idle"},
+		"orders": [], "next_order_id": 1, "last_order": {}}
 
 static func snapshot(ship: Dictionary) -> Dictionary:
 	var saved := {}
 	for key: String in FIELDS:
 		saved[key] = ship[key]
+	for key: String in ORDER_DEFAULTS:
+		saved[key] = ship.get(key, ORDER_DEFAULTS[key])
 	return saved.duplicate(true)
 
 static func valid(ship: Dictionary, system_count: int) -> bool:

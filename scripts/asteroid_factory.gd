@@ -21,5 +21,8 @@ static func create(position: Vector2, radius: float, ore: float, id: String, gal
 		# Preserve the original random stream and existing silhouettes.
 		shape_rng.randf_range(0.40, 0.58)
 		shape_rng.randf_range(-0.15, 0.15)
-	var capacity := roundi(radius * radius / 42.25 * ore)
+	var capacity := ore_capacity(radius, ore)
 	return {"position": position, "radius": radius, "shape": shape, "base": base, "id": id, "iron": clampi(int(depleted_ore.get(id, capacity)), 0, capacity), "max_iron": capacity}
+
+static func ore_capacity(radius: float, ore: float) -> int:
+	return roundi(radius * radius / 42.25 * ore)

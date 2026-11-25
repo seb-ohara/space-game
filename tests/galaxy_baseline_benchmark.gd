@@ -3,6 +3,7 @@ extends SceneTree
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const MODULES := preload("res://scripts/ship_modules.gd")
 const FLIGHT := preload("res://main.tscn")
+const SHIP_STATE := preload("res://scripts/ships/ship_state.gd")
 const SEED := 7419
 const SAMPLES := 3
 const WARMUP_TICKS := 30
@@ -15,7 +16,8 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
-	print("systems,map_ms,formation_ms,flight_init_ms,flight_tick_mean_ms,presentation_mean_ms")
+	var remote_ships := 100 if "--fleet" in OS.get_cmdline_user_args() else 0
+	print("systems,remote_ships,map_ms,formation_ms,flight_init_ms,flight_tick_mean_ms,presentation_mean_ms")
 	for count in [100, 250, 500, 1000]:
 		var map_times: Array[float] = []
 		var formation_times: Array[float] = []
@@ -45,6 +47,12 @@ func _run() -> void:
 			}]}
 			start = Time.get_ticks_usec()
 			game._start_flight(map, contents, state)
+			for index in remote_ships:
+				var system: Dictionary = map.systems[1 + index % (count - 1)]
+				var position: Vector2 = system.center - origin + Vector2(index * 900.0, 0.0)
+				var ship: Dictionary = game._register_ship({"name": "Remote ship", "parts": MODULES.default_design(),
+					"position": position, "heading": 0.0, "hull": 100.0, "shield": 0.0, "shield_delay": 0.0})
+				assert(game._submit_fleet_order(index + 1, "move", SHIP_STATE.absolute(ship.galaxy_position, Vector2(50000, 0))))
 			game._redraw_flight()
 			init_times.append(float(Time.get_ticks_usec() - start) / 1000.0)
 			game.set_physics_process(false)
@@ -68,9 +76,12 @@ func _run() -> void:
 			tick_times.append(float(tick_usec) / (MEASURED_TICKS * 1000.0))
 			presentation_times.append(float(presentation_usec) / (BATCHES * 1000.0))
 			assert(game.ship_position != Vector2.ZERO)
+			assert(game.fleet_views.is_empty())
+			if remote_ships > 0:
+				assert(game.fleet[remote_ships].velocity.length() > 0.0)
 			game.free()
 			await process_frame
-		print("%d,%.3f,%.3f,%.3f,%.3f,%.3f" % [count, _median(map_times), _median(formation_times),
+		print("%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f" % [count, remote_ships, _median(map_times), _median(formation_times),
 			_median(init_times), _median(tick_times), _median(presentation_times)])
 	print("Galaxy baseline benchmark complete")
 	quit()

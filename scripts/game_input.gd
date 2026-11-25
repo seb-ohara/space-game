@@ -16,6 +16,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if is_instance_valid(game.hangar_layer):
 		return
+	if not game.order_target_request.is_empty() and event.is_action_pressed("ui_cancel"):
+		game._cancel_order_target()
+		game.get_viewport().set_input_as_handled()
+		return
 	if is_instance_valid(game.settings_layer):
 		var settings_menu: Control = game.settings_layer.get_child(0)
 		if not settings_menu.rebinding_action.is_empty():
@@ -120,6 +124,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if not event.pressed:
 			return
+		if not game.order_target_request.is_empty() and event.button_index == MOUSE_BUTTON_LEFT and not event.shift_pressed:
+			game._pick_order_target(event.position)
+			game.get_viewport().set_input_as_handled()
+			return
 		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var step = pow(game.CAMERA_ZOOM_STEP, event.factor if event.factor > 0.0 else 1.0)
 			var zoom_factor = step if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / step
@@ -162,7 +170,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			if not game.selected_fleet.is_empty():
-				game._rts_issue_order(event.position)
+				game._rts_issue_order(event.position, event.shift_pressed)
 			elif game.control_mode == 0:
 				game._select_target_at(game._screen_to_world(event.position, false))
 			game.get_viewport().set_input_as_handled()

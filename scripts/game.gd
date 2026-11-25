@@ -126,6 +126,17 @@ const SHIP_STATE := preload("res://scripts/ships/ship_state.gd")
 const SHIP_REGISTRY := preload("res://scripts/ships/ship_registry.gd")
 const SHIP_SIMULATION := preload("res://scripts/ships/ship_simulation.gd")
 const SHIP_CAPABILITIES := preload("res://scripts/ships/ship_capabilities.gd")
+const SHIP_ORDER := preload("res://scripts/ships/ship_order.gd")
+const SHIP_ORDER_QUEUE := preload("res://scripts/ships/ship_order_queue.gd")
+const SHIP_ORDER_CONTROLLER := preload("res://scripts/ships/ship_order_controller.gd")
+const FLEET_ORDER_PANEL := preload("res://scripts/fleet_order_panel.gd")
+var order_controller := SHIP_ORDER_CONTROLLER.new()
+var active_order_hold := false
+var autonomous_mining_target := false
+var order_status_label: Label
+var order_notice_until_usec := 0
+var fleet_order_list_dirty := false
+var order_target_request := {}
 const FLEET_VIEW_RANGE := 32000.0
 const FLEET_VIEW_EXIT_RANGE := 40000.0
 var ship_registry := SHIP_REGISTRY.new()
@@ -214,6 +225,8 @@ var save_slot := ""
 var galaxy_seed := 0
 var asteroid_system := -1
 var depleted_ore := {}
+var live_rocks := {}
+var order_rocks := {}
 var asteroid_visuals: Node2D
 var asteroid_effects: Node2D
 var enemy_visuals: Node2D
@@ -325,7 +338,8 @@ func _load_game(slot_id: String) -> void:
 
 func _valid_flight_save(state: Dictionary) -> bool:
 	var ships: Variant = state.get("fleet")
-	var current := int(state.get("format_version", 1)) >= 3
+	var format := int(state.get("format_version", 1))
+	var current := format >= 3
 	if not ships is Array or ships.is_empty():
 		return false
 	if current:
@@ -347,6 +361,8 @@ func _valid_flight_save(state: Dictionary) -> bool:
 			return false
 		if current:
 			if not SHIP_STATE.valid(ship, state.count) or ids.has(ship.id):
+				return false
+			if format >= 4 and not SHIP_ORDER_QUEUE.valid(ship, state.count):
 				return false
 			ids[ship.id] = true
 		elif not SHIP_STATE.finite_vector(ship.get("position")):
@@ -442,12 +458,25 @@ func _restore_flight(state: Dictionary) -> void:
 					"system": destination, "distance": maxf(0.0, float(distance)) if SHIP_STATE.finite_number(distance) else 0.0, "time": 0.0}
 	for ship in fleet:
 		_prepare_fleet_stats(ship)
+		if state.has("format_version") and int(state.format_version) < 4:
+			_migrate_navigation_order(ship)
 	_load_active_ship_state(fleet[active_fleet_index])
 	if SIMULATION_CLOCK.valid_snapshot(state.get("clock")):
 		simulation_clock.restore(state.clock)
 	play_time = SAVES.play_seconds(state)
 	if state.get("ore_remaining") is Dictionary:
 		depleted_ore = state.ore_remaining
+
+func _migrate_navigation_order(ship: Dictionary) -> void:
+	var nav: Dictionary = ship.navigation
+	var systems := solar_system.systems.size()
+	if nav.mode == "move":
+		SHIP_ORDER_QUEUE.submit(ship, "move", nav.target, 0.0, false, true, systems)
+	elif nav.mode == "jump" and SHIP_ORDER_QUEUE.submit(ship, "hyperjump", nav.system, 0.0, false, true, systems):
+		var order: Dictionary = ship.orders[0]
+		order.state = "running"
+		order.stage = "jump"
+		order.progress = {"travel_target": nav.target, "jump_distance": nav.distance}
 
 func _save_galaxy() -> bool:
 	_save_active_fleet_ship()
@@ -762,6 +791,11 @@ func _process(_delta: float) -> void:
 		_queue_flight_redraw()
 	if calendar_dirty:
 		_refresh_simulation_controls()
+	if fleet_order_list_dirty and is_instance_valid(fleet_dialog) and fleet_dialog.visible:
+		_refresh_fleet_list()
+		fleet_order_list_dirty = false
+	if order_status_label.visible and order_target_request.is_empty() and now >= order_notice_until_usec:
+		order_status_label.hide()
 	if flight_redraw_pending:
 		if simulation_clock.paused and not _simulation_menu_open():
 			_maybe_rebase_world()
@@ -816,6 +850,17 @@ func _create_top_controls() -> void:
 	_add_top_button(layer, "hangar", -114, -72, "Hangar — choose, design, and launch ships.", _open_hangar)
 	_add_top_button(layer, "settings", -64, -22, "Settings — open the flight menu.", _open_settings)
 	_create_simulation_controls(layer)
+	order_status_label = Label.new()
+	order_status_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	order_status_label.offset_left = -550.0
+	order_status_label.offset_right = -22.0
+	order_status_label.offset_top = 68.0
+	order_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	order_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	order_status_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	order_status_label.add_theme_constant_override("shadow_offset_y", 2)
+	order_status_label.hide()
+	layer.add_child(order_status_label)
 
 func _create_simulation_controls(layer: CanvasLayer) -> void:
 	simulation_rate_control = OptionButton.new()
@@ -918,15 +963,17 @@ func _open_fleet() -> void:
 		return
 	if not is_instance_valid(fleet_dialog):
 		_create_fleet_dialog()
+	if not order_target_request.is_empty():
+		_cancel_order_target()
 	_refresh_fleet_designs()
 	_refresh_fleet_list()
-	fleet_status.text = "Your fleet is saved with this galaxy."
+	fleet_status.text = "Select a ship to assign orders or take direct control."
 	fleet_dialog.popup_centered()
 
 func _create_fleet_dialog() -> void:
 	fleet_dialog = AcceptDialog.new()
 	fleet_dialog.title = "Fleet"
-	fleet_dialog.size = Vector2i(540, 440)
+	fleet_dialog.size = Vector2i(580, 565)
 	fleet_dialog.get_ok_button().text = "Close"
 	add_child(fleet_dialog)
 	var column := VBoxContainer.new()
@@ -942,6 +989,11 @@ func _create_fleet_dialog() -> void:
 	take_control.text = "Take control of selected ship"
 	take_control.pressed.connect(_take_fleet_control)
 	column.add_child(take_control)
+	var orders := FLEET_ORDER_PANEL.new()
+	orders.systems = solar_system.systems
+	orders.submitted.connect(_fleet_panel_order)
+	orders.cancel_requested.connect(func(): _cancel_fleet_orders(_fleet_panel_selection()))
+	column.add_child(orders)
 	var label := Label.new()
 	label.text = "Spawn a ship near the controlled ship"
 	column.add_child(label)
@@ -972,12 +1024,63 @@ func _refresh_fleet_designs() -> void:
 	for design in fleet_design_entries:
 		fleet_designs.add_item(design.name)
 
+func _fleet_panel_selection() -> int:
+	var selected := fleet_list.get_selected_items()
+	return active_fleet_index if selected.is_empty() else selected[0]
+
 func _refresh_fleet_list() -> void:
+	var selected := _fleet_panel_selection()
 	fleet_list.clear()
 	for i in range(fleet.size()):
 		var ship: Dictionary = fleet[i]
-		fleet_list.add_item("%s%s" % [ship.name, "  ·  flagship" if i == active_fleet_index else "  ·  owned"])
-	fleet_list.select(active_fleet_index)
+		var order := SHIP_ORDER_QUEUE.current(ship)
+		var status := SHIP_ORDER.caption(order)
+		if ship.orders.size() > 1:
+			status += "  +%d queued" % (ship.orders.size() - 1)
+		fleet_list.add_item("%s%s  ·  %s" % [ship.name, "  [pilot]" if i == active_fleet_index else "", status])
+		if not ship.last_order.is_empty():
+			var report: Dictionary = ship.last_order
+			fleet_list.set_item_tooltip(i, "%s %s: %s" % [report.type.capitalize(), report.state, report.reason])
+	fleet_list.select(clampi(selected, 0, fleet.size() - 1))
+
+func _fleet_panel_order(type: String, parameter: float, repeat: bool, append: bool) -> void:
+	var index := _fleet_panel_selection()
+	if type in ["move", "mine"]:
+		order_target_request = {"ship_id": fleet[index].id, "type": type, "quantity": parameter, "repeat": repeat, "append": append}
+		rts_dragging = false
+		firing = false
+		fleet_dialog.hide()
+		_show_order_notice("Click a %s for %s · Esc to cancel." % ["visible asteroid" if type == "mine" else "destination", fleet[index].name])
+	elif not _submit_fleet_order(index, type, int(parameter) if type == "hyperjump" else null, parameter, repeat, append):
+		_show_order_notice("Order could not be queued. Check its parameters or clear the queue.")
+
+func _pick_order_target(screen_position: Vector2) -> void:
+	var request := order_target_request
+	var index := fleet.find(ship_registry.find(request.ship_id))
+	if index < 0:
+		_cancel_order_target()
+		return
+	var target: Variant = SHIP_STATE.absolute(galaxy_origin, _screen_to_world(screen_position))
+	if request.type == "mine":
+		var rock := MINING_CONTROLLER.find_target(asteroids, _screen_to_world(screen_position, false))
+		if rock < 0:
+			_show_order_notice("No mineable asteroid at that point. Try another rock or press Esc.")
+			return
+		target = asteroids[rock].id
+	order_target_request = {}
+	if not _submit_fleet_order(index, request.type, target, request.quantity, request.repeat, request.append):
+		_show_order_notice("Order could not be queued. Check its parameters or clear the queue.")
+
+func _cancel_order_target() -> void:
+	order_target_request = {}
+	_show_order_notice("Target selection cancelled.")
+
+func _show_order_notice(text: String) -> void:
+	order_status_label.text = text
+	order_status_label.show()
+	order_notice_until_usec = Time.get_ticks_usec() + 6000000
+	if is_instance_valid(fleet_dialog) and fleet_dialog.visible:
+		fleet_status.text = text
 
 func _register_ship(legacy: Dictionary) -> Dictionary:
 	var ship := ship_registry.new_ship(legacy, galaxy_origin)
@@ -986,6 +1089,146 @@ func _register_ship(legacy: Dictionary) -> Dictionary:
 
 func _ship_local(ship: Dictionary) -> Vector2:
 	return SHIP_STATE.relative(ship.galaxy_position, galaxy_origin)
+
+func _submit_fleet_order(index: int, type: String, target: Variant = null, quantity: float = 0.0, repeat := false, append := false) -> bool:
+	if index < 0 or index >= fleet.size():
+		return false
+	var ship: Dictionary = fleet[index]
+	if ship.owner_id != SHIP_STATE.OWNER_PLAYER:
+		return false
+	var replace_navigation: bool = not append or ship.orders.is_empty()
+	if index == active_fleet_index:
+		_commit_active_ship_state()
+	if not SHIP_ORDER_QUEUE.submit(ship, type, target, quantity, repeat, append, solar_system.systems.size()):
+		return false
+	if replace_navigation:
+		ship.navigation = {"mode": "hold"}
+		if index == active_fleet_index:
+			_apply_active_order_navigation(ship)
+	fleet_order_list_dirty = true
+	_show_order_notice("%s: %s order %s." % [ship.name, type.capitalize(), "queued" if append else "assigned"])
+	return true
+
+func _cancel_fleet_orders(index: int) -> void:
+	if index < 0 or index >= fleet.size():
+		return
+	var ship: Dictionary = fleet[index]
+	if ship.owner_id != SHIP_STATE.OWNER_PLAYER or not SHIP_ORDER_QUEUE.cancel(ship):
+		return
+	if index == active_fleet_index:
+		_apply_active_order_navigation(ship)
+	fleet_order_list_dirty = true
+	_show_order_notice("%s: orders cancelled." % ship.name)
+
+func _run_fleet_order(ship: Dictionary, delta: float) -> void:
+	var order: Dictionary = ship.orders[0]
+	var previous_stage: String = order.stage
+	var previous_state: String = order.state
+	order_controller.tick(ship, delta, _resolve_order_jump, _resolve_order_rock, _extract_order_ore)
+	if ship.last_order.get("id") == order.id:
+		fleet_order_list_dirty = true
+		var report: Dictionary = ship.last_order
+		_show_order_notice("%s · %s %s: %s" % [ship.name, report.type.capitalize(), report.state, report.reason])
+	elif order.stage != previous_stage or order.state != previous_state:
+		fleet_order_list_dirty = true
+
+func _drive_active_order(delta: float) -> bool:
+	autonomous_mining_target = false
+	var ship: Dictionary = fleet[active_fleet_index]
+	var manual := control_mode == 0 and (Input.is_action_pressed("flight_forward") or Input.is_action_pressed("flight_back") \
+		or Input.is_action_pressed("flight_left") or Input.is_action_pressed("flight_right") or Input.is_action_pressed("fire") \
+		or boost_charging or sustained_boost_enabled or boost_time > 0.0)
+	if manual and hyperjump_time < 0.0:
+		if not ship.orders.is_empty() and ship.orders[0].state != "suspended":
+			order_controller.suspend(ship)
+			rts_move_active = false
+			fleet_order_list_dirty = true
+		active_order_hold = false
+		return false
+	if ship.orders.is_empty():
+		return false
+	_run_fleet_order(ship, delta)
+	_apply_active_order_navigation(ship)
+	iron = ship.cargo.iron
+	tritium = ship.cargo.tritium
+	if not ship.orders.is_empty():
+		var order: Dictionary = ship.orders[0]
+		if order.type == "mine" and order.stage in ["aiming", "mining"] and live_rocks.has(order.target_entity_id):
+			var index: int = live_rocks[order.target_entity_id].index
+			if index < asteroids.size() and asteroids[index].id == order.target_entity_id:
+				mining_asteroid = index
+				autonomous_mining_target = true
+				mining = order.stage == "mining" and asteroids[index].iron > 0
+	return true
+
+func _apply_active_order_navigation(ship: Dictionary) -> void:
+	var nav: Dictionary = ship.navigation
+	var was_jumping := hyperjump_time >= 0.0
+	rts_attack_active = false
+	firing = false
+	mining = false
+	mining_asteroid = -1
+	sustained_boost_enabled = false
+	boost_destination_active = false
+	boost_decelerating = false
+	boost_charging = false
+	boost_time = 0.0
+	rts_move_active = nav.mode == "move"
+	active_order_hold = nav.mode == "hold"
+	if rts_move_active:
+		rts_destination = SHIP_STATE.relative(nav.target, galaxy_origin)
+	if nav.mode == "jump":
+		hyperjump_galaxy_target = nav.target
+		hyperjump_arrival = SHIP_STATE.relative(nav.target, galaxy_origin)
+		hyperjump_destination = nav.system
+		hyperjump_distance = nav.distance
+		hyperjump_time = nav.time
+	else:
+		hyperjump_time = -1.0
+		if was_jumping and ship.last_order.get("state") == "completed":
+			hyperjump_arrival_until = elapsed + 3.0
+
+func _resolve_order_jump(ship: Dictionary, destination: int) -> PackedFloat64Array:
+	var source := solar_system.nearest_system(_ship_local(ship))
+	return solar_system.hyperjump_arrival_coordinates(source, destination) if source != destination else PackedFloat64Array()
+
+func _resolve_order_rock(id: String) -> Dictionary:
+	if live_rocks.has(id):
+		return live_rocks[id]
+	if not order_rocks.has(id):
+		var prefix := id.get_slice("/", 0)
+		if not prefix.is_valid_int():
+			return {}
+		var system := int(prefix)
+		if system < 0 or system >= solar_system.systems.size():
+			return {}
+		var sites := GALAXY.asteroid_sites(galaxy_seed, solar_system.systems[system], solar_system.system_contents(system))
+		for index in sites.size():
+			var site := sites[index]
+			var candidate := "%d/field/%s" % [system, site.field_id] if site.has("field_id") else "%d/%d" % [system, index]
+			if candidate == id:
+				order_rocks[id] = {"galaxy_position": SHIP_STATE.point(site.position.x, site.position.y),
+					"radius": site.radius, "max_iron": ASTEROID_FACTORY.ore_capacity(site.radius, site.ore)}
+				break
+	if not order_rocks.has(id):
+		return {}
+	var rock: Dictionary = order_rocks[id]
+	rock.iron = clampi(int(depleted_ore.get(id, rock.max_iron)), 0, rock.max_iron)
+	return rock
+
+func _extract_ore(id: String, requested: int) -> int:
+	var rock := _resolve_order_rock(id)
+	if rock.is_empty():
+		return 0
+	var extracted := clampi(requested, 0, rock.iron)
+	rock.iron -= extracted
+	depleted_ore[id] = rock.iron
+	return extracted
+
+func _extract_order_ore(ship: Dictionary, id: String, requested: int) -> int:
+	var amount := _extract_ore(id, mini(requested, SHIP_CAPABILITIES.available_space(ship.fleet_stats, ship.cargo)))
+	ship.cargo.iron += amount
+	return amount
 
 func _prepare_fleet_stats(ship: Dictionary) -> void:
 	var bounds := MODULES.bounds(ship.parts)
@@ -1027,6 +1270,8 @@ func _commit_active_ship_state() -> void:
 		ship.navigation = {"mode": "decelerate"}
 	elif rts_move_active:
 		ship.navigation = {"mode": "move", "target": SHIP_STATE.absolute(galaxy_origin, rts_destination)}
+	elif active_order_hold and not velocity.is_zero_approx():
+		ship.navigation = {"mode": "hold"}
 	else:
 		ship.navigation = {"mode": "drift" if not velocity.is_zero_approx() else "idle"}
 
@@ -1054,6 +1299,7 @@ func _load_active_ship_state(ship: Dictionary) -> void:
 	hyperjump_time = -1.0
 	hyperjump_arrival_until = 0.0
 	var nav: Dictionary = ship.navigation
+	active_order_hold = nav.mode == "hold"
 	match nav.mode:
 		"move":
 			rts_move_active = true
@@ -1292,6 +1538,7 @@ func _set_sustained_boost(enabled: bool, direction := Vector2.ZERO) -> void:
 	boost_decelerating = not enabled and sustained_boost_enabled
 	sustained_boost_enabled = enabled
 	if enabled:
+		active_order_hold = false
 		_clear_combat_control()
 	sustained_boost_direction = direction
 	boost_destination_active = false
@@ -1395,6 +1642,8 @@ func _initiate_context_hyperjump() -> void:
 func _execute_hyperjump(source: int, destination: int) -> void:
 	if source == destination or not _can_hyperjump() or hyperjump_time >= 0.0:
 		return
+	_cancel_fleet_orders(active_fleet_index)
+	active_order_hold = false
 	hyperjump_destination = destination
 	hyperjump_galaxy_target = solar_system.hyperjump_arrival_coordinates(source, destination)
 	hyperjump_arrival = SHIP_STATE.relative(hyperjump_galaxy_target, galaxy_origin)
@@ -2229,8 +2478,8 @@ func _turret_angle(part: Dictionary) -> float:
 
 func _update_turrets(delta: float) -> void:
 	_ensure_ship_cache()
-	var target_position := _aim_world_position()
-	var tracked_turrets: Array = WEAPON_SLOTS[selected_weapon - 1].turrets
+	var target_position: Vector2 = asteroids[mining_asteroid].position if autonomous_mining_target else _aim_world_position()
+	var tracked_turrets: Array = ["miner"] if autonomous_mining_target else WEAPON_SLOTS[selected_weapon - 1].turrets
 	for part in cached_turret_mounts:
 		var kind: String = part.turret
 		var current := _turret_angle(part)
@@ -2301,6 +2550,8 @@ func _load_asteroids_near_ship() -> void:
 		var visual: Node2D = asteroid.visual
 		visual.free()
 	asteroids.clear()
+	live_rocks.clear()
+	autonomous_mining_target = false
 	selected_asteroid = -1
 	mining_asteroid = -1
 	mining_progress = 0.0
@@ -2310,10 +2561,14 @@ func _load_asteroids_near_ship() -> void:
 	for i in sites.size():
 		var site := sites[i]
 		var id := "%d/field/%s" % [index, site.field_id] if site.has("field_id") else "%d/%d" % [index, i]
-		_add_asteroid(solar_system.local_point(site.position.x, site.position.y), site.radius, site.ore, id)
+		_add_asteroid(solar_system.local_point(site.position.x, site.position.y), site.radius, site.ore, id,
+			SHIP_STATE.point(site.position.x, site.position.y))
 
-func _add_asteroid(position: Vector2, radius: float, ore: float, id: String) -> void:
+func _add_asteroid(position: Vector2, radius: float, ore: float, id: String, absolute := PackedFloat64Array()) -> void:
 	var asteroid := ASTEROID_FACTORY.create(position, radius, ore, id, galaxy_seed, depleted_ore)
+	asteroid.galaxy_position = absolute if not absolute.is_empty() else SHIP_STATE.absolute(galaxy_origin, position)
+	asteroid.index = asteroids.size()
+	live_rocks[id] = asteroid
 	var visual := _add_draw_layer(asteroid_visuals, func(canvas: CanvasItem): _draw_asteroid(asteroid, canvas))
 	visual.position = position
 	asteroid_visuals.move_child(visual, asteroid_effects.get_index())
@@ -2385,33 +2640,36 @@ func _show_fleet_context(index: int, screen_position: Vector2) -> void:
 	fleet_context_menu.position = Vector2i(menu_position)
 	fleet_context_menu.popup()
 
-func _rts_issue_order(screen_position: Vector2) -> void:
+func _rts_issue_order(screen_position: Vector2, append := false) -> void:
+	if selected_fleet.is_empty():
+		return
 	var destination := _screen_to_world(screen_position)
+	var target_at := _screen_to_world(screen_position, false)
+	var rock := MINING_CONTROLLER.find_target(asteroids, target_at) if selected_weapon == 2 else -1
+	if rock >= 0:
+		for index in selected_fleet:
+			_submit_fleet_order(index, "mine", asteroids[rock].id, 1.0, true, append)
+		return
 	var selected_center := Vector2.ZERO
 	for index in selected_fleet:
 		selected_center += ship_position if index == active_fleet_index else _ship_local(fleet[index])
-	if not selected_fleet.is_empty():
-		selected_center /= float(selected_fleet.size())
+	selected_center /= float(selected_fleet.size())
 	for index in selected_fleet:
-		if index != active_fleet_index:
-			var owned_ship: Dictionary = fleet[index]
-			var local_target := (destination + _ship_local(owned_ship) - selected_center).clamp(_world_min(), _world_max())
-			owned_ship.navigation = {"mode": "move", "target": SHIP_STATE.absolute(galaxy_origin, local_target)}
-	if not selected_fleet.has(active_fleet_index):
-		return
-	var previous_enemy := selected_enemy
-	var previous_asteroid := selected_asteroid
-	if not _combat_locked():
-		_select_target_at(_screen_to_world(screen_position, false))
-	if not _combat_locked() and (selected_enemy >= 0 or (selected_weapon == 2 and selected_asteroid >= 0)):
-		rts_attack_active = true
-		rts_move_active = false
-	else:
-		selected_enemy = previous_enemy
-		selected_asteroid = previous_asteroid
-		rts_move_active = true
-		rts_destination = (destination + ship_position - selected_center).clamp(_world_min(), _world_max())
-	mining_progress = 0.0
+		var position: Vector2 = ship_position if index == active_fleet_index else _ship_local(fleet[index])
+		if index == active_fleet_index and not append and not _combat_locked():
+			var previous_enemy := selected_enemy
+			var previous_asteroid := selected_asteroid
+			_select_target_at(target_at)
+			if selected_enemy >= 0:
+				_cancel_fleet_orders(index)
+				rts_attack_active = true
+				rts_move_active = false
+				mining_progress = 0.0
+				continue
+			selected_enemy = previous_enemy
+			selected_asteroid = previous_asteroid
+		var local_target := (destination + position - selected_center).clamp(_world_min(), _world_max())
+		_submit_fleet_order(index, "move", SHIP_STATE.absolute(galaxy_origin, local_target), 0.0, false, append)
 
 func _finish_rts_selection(screen_position: Vector2) -> void:
 	rts_dragging = false
@@ -2490,9 +2748,7 @@ func _update_mining(delta: float) -> void:
 	mining_progress = result.progress
 	mining = result.active
 	if result.extracted > 0:
-		asteroid.iron -= result.extracted
-		depleted_ore[asteroid.id] = asteroid.iron
-		iron += result.extracted
+		iron += _extract_ore(asteroid.id, result.extracted)
 	if result.depleted:
 		if selected_asteroid == mining_asteroid:
 			selected_asteroid = -1
@@ -2764,6 +3020,7 @@ func _physics_process(_real_step: float) -> void:
 
 func _step_flight(delta: float) -> void:
 	_update_owned_fleet(delta)
+	var autonomous := _drive_active_order(delta)
 	engine_throttle_target = 0.0
 	engine_boost_target = 0.0
 	if control_mode == 1 or rts_attack_active:
@@ -2808,7 +3065,8 @@ func _step_flight(delta: float) -> void:
 	var ship_turn_speed := turn_speed * float(ship.turn) * lerpf(1.0, 0.45, speed_fraction)
 	if boost_decelerating and velocity.length() <= speed_limit + 0.01:
 		boost_decelerating = false
-	_update_mining(delta)
+	if not autonomous:
+		_update_mining(delta)
 	if hyperjump_time >= 0.0:
 		var cruise_speed := _hyperjump_cruise_speed()
 		var jump_acceleration := cruise_speed / HYPERJUMP_ACCELERATION_SECONDS
@@ -2829,6 +3087,10 @@ func _step_flight(delta: float) -> void:
 		velocity = velocity.move_toward(velocity.normalized() * speed_limit, ship_acceleration * 2.0 * delta)
 		_steer_heading(Vector2.ZERO, ship_turn_speed, delta)
 		thrust = move_toward(thrust, 0.0, delta * 5.0)
+	elif active_order_hold and not manual_control:
+		velocity = velocity.move_toward(Vector2.ZERO, maxf(1.0, ship_acceleration) * 1.25 * delta)
+		_steer_heading(Vector2.ZERO, ship_turn_speed, delta)
+		thrust = move_toward(thrust, 0.0, delta * THROTTLE_RAMP)
 	elif has_flight_controls and rts_move_active:
 		_update_rts_flight(speed_limit, ship_acceleration, ship_turn_speed, delta)
 	else:
@@ -2871,6 +3133,8 @@ func _update_owned_fleet(delta: float) -> void:
 		if index == active_fleet_index:
 			continue
 		var ship: Dictionary = fleet[index]
+		if not ship.orders.is_empty():
+			_run_fleet_order(ship, delta)
 		var stats: Dictionary = ship.fleet_stats
 		var recharge := maxf(0.0, delta - float(ship.shield_delay))
 		ship.shield_delay = maxf(0.0, float(ship.shield_delay) - delta)
@@ -2904,6 +3168,11 @@ func _step_parked_navigation(ship: Dictionary, delta: float) -> float:
 	if not ship.can_fly or speed_limit <= 0.0:
 		ship.navigation = {"mode": "idle"}
 		ship.velocity = Vector2.ZERO
+		return 0.0
+	if nav.mode == "hold":
+		ship.velocity = current.move_toward(Vector2.ZERO, maxf(1.0, accel) * 1.25 * delta)
+		if ship.velocity.is_zero_approx():
+			ship.navigation = {"mode": "idle"}
 		return 0.0
 	if nav.mode == "move":
 		var offset := SHIP_STATE.relative(nav.target, ship.galaxy_position)
@@ -3214,7 +3483,7 @@ func _draw_aim_indicators(size: Vector2) -> void:
 		draw_arc(tip, 5.0, 0.0, TAU, 20, color, 1.5, true)
 
 func _draw_mining_beams() -> void:
-	if not mining:
+	if not mining or mining_asteroid < 0 or mining_asteroid >= asteroids.size():
 		return
 	var asteroid: Dictionary = asteroids[mining_asteroid]
 	for part in cached_turret_mounts:
