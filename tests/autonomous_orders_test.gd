@@ -52,14 +52,15 @@ func _exercise(rate: int) -> void:
 	game._open_fleet()
 	game.fleet_list.select(2)
 	game._fleet_panel_order("mine", 2, false, true)
-	game._pick_order_target(game._world_to_screen(rock.position))
-	assert(wing.orders.size() == 3 and wing.orders[2].target_entity_id == rock_id)
+	assert(game.order_target_request.is_empty())
+	assert(wing.orders.size() == 3 and wing.orders[2].target_entity_id == "")
 	await _until(game, func(): return wing.galaxy_position != original, 2.0)
 	assert(STATE.relative(wing.galaxy_position, original).length() < 20.0)
 	game._switch_fleet_control(1)
 	assert(game.asteroid_system == 1 and not game.fleet_views.has(wing.id) and not game.live_rocks.has(rock_id))
+	assert(game._nearest_mineable_asteroid(wing) == rock_id)
 	await _until(game, func(): return wing.orders[0].type == "mine" and wing.orders[0].progress.get("fraction", 0.0) > 0.25, 25.0)
-	assert(wing.orders[0].stage == "mining" and wing.cargo.iron == 0)
+	assert(wing.orders[0].stage == "mining" and wing.cargo.iron == 0 and wing.orders[0].target_entity_id == rock_id)
 	game._set_simulation_rate(0)
 	assert(game._save_galaxy())
 	var slot_id: String = game.save_slot
@@ -85,7 +86,10 @@ func _exercise(rate: int) -> void:
 	assert(game.iron == 3 and wing.cargo.iron == 3 and game.depleted_ore[rock_id] == initial_ore - 3)
 	game._switch_fleet_control(1)
 
-	# Two explicit repeat orders contend for a deposit with just three units left.
+	# Two miners contend for the last three units in the system.
+	var sites := GALAXY.asteroid_sites(SEED, game.solar_system.systems[0], game.solar_system.system_contents(0))
+	for i in sites.size():
+		game.depleted_ore[game._asteroid_site_id(0, i, sites[i])] = 0
 	game.depleted_ore[rock_id] = 3
 	var helper: Dictionary = game._register_ship(_ship("Helper", Vector2.ZERO, true))
 	helper.galaxy_position = STATE.absolute(game._resolve_order_rock(rock_id).galaxy_position, Vector2(450, 0))
@@ -94,6 +98,7 @@ func _exercise(rate: int) -> void:
 	await _until(game, func(): return wing.orders.is_empty() and helper.orders.is_empty(), 5.0)
 	assert(game.depleted_ore[rock_id] == 0 and wing.cargo.iron + helper.cargo.iron == 6)
 	assert(wing.last_order.state == "blocked" and helper.last_order.state == "blocked")
+	assert("No ore left" in wing.last_order.reason and "No ore left" in helper.last_order.reason)
 
 	var pilot: Dictionary = game.fleet[0]
 	assert(game._submit_fleet_order(0, "mine", rock_id, 1.0))
@@ -124,13 +129,12 @@ func _exercise(rate: int) -> void:
 	assert(pilot.last_order.type == "idle" and pilot.last_order.state == "completed")
 	assert(pilot.velocity == Vector2.ZERO and pilot.navigation.mode == "idle")
 	var scout: Dictionary = game.fleet[1]
-	game.control_mode = 0
 	var manual_target := STATE.absolute(scout.galaxy_position, Vector2(0, 2000.0))
 	assert(game._submit_fleet_order(1, "move", manual_target))
 	await _until(game, func(): return scout.orders[0].state == "running", 1.0)
-	Input.action_press("flight_forward")
+	game._toggle_sustained_boost()
 	await _until(game, func(): return scout.orders[0].state == "suspended", 1.0)
-	Input.action_release("flight_forward")
+	game._toggle_sustained_boost()
 	await _until(game, func(): return scout.orders[0].state == "running", 1.0)
 	assert(game._submit_fleet_order(1, "stop"))
 	assert(scout.last_order.type == "move" and scout.last_order.state == "cancelled" and scout.orders.size() == 1)

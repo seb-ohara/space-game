@@ -16,7 +16,6 @@ func _run() -> void:
 	root.add_child(game)
 	var overload := "--overload" in OS.get_cmdline_user_args()
 	Engine.max_fps = 15 if overload else 60
-	game.control_mode = 0
 	game.graphics_quality = 2
 	game.engine_audio.volume = 0.0
 	var map := GALAXY.create_map(7419, 1000)

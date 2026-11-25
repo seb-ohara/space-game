@@ -61,7 +61,7 @@ func _run() -> void:
 	assert(game.world_origin == origin + shift)
 	assert(game._ship_local(wing) - game.ship_position == wing_offset)
 	assert(wing.galaxy_position == wing_position and wing.navigation.target == wing_target)
-	assert(game.fleet_views[wing.id].body.position == game._ship_local(wing))
+	assert(game.fleet_colliders[wing.id].body.position == game._ship_local(wing))
 	assert((game.asteroids[0].position - game.ship_position).is_equal_approx(rock_offset))
 
 	# Use a real physics-frame context for CharacterBody2D movement.

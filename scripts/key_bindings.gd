@@ -1,14 +1,13 @@
 extends RefCounted
 
 const ACTIONS := {
-	"flight_forward": ["Forward / pan up", KEY_W],
-	"flight_back": ["Brake / pan down", KEY_S],
-	"flight_left": ["Turn left / pan left", KEY_A],
-	"flight_right": ["Turn right / pan right", KEY_D],
-	"boost_recenter": ["Boost / recenter (RTS)", KEY_SPACE],
+	"camera_pan_up": ["Pan camera up", KEY_W],
+	"camera_pan_down": ["Pan camera down", KEY_S],
+	"camera_pan_left": ["Pan camera left", KEY_A],
+	"camera_pan_right": ["Pan camera right", KEY_D],
+	"boost_recenter": ["Recenter camera (alternate)", KEY_SPACE],
 	"recenter": ["Recenter camera", KEY_F],
 	"cycle_target": ["Cycle target", KEY_TAB],
-	"fire": ["Fire (flight mode)", KEY_X],
 	"weapon_1": ["Laser", KEY_1],
 	"weapon_2": ["Mining laser", KEY_2],
 	"weapon_3": ["Machine gun", KEY_3],

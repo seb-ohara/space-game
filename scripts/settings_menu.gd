@@ -10,7 +10,6 @@ signal hangar_requested
 signal graphics_quality_changed(value: int)
 signal frame_cap_changed(value: int)
 signal vsync_changed(enabled: bool)
-signal control_mode_changed(value: int)
 signal engine_volume_changed(value: float)
 
 var in_flight := true
@@ -21,7 +20,6 @@ var maximum_zoom := 1.0
 var initial_graphics_quality := 2
 var initial_frame_cap := 0
 var initial_vsync := false
-var initial_control_mode := 0
 var initial_engine_volume := 0.7
 var rebinding_action := ""
 var binding_buttons := {}
@@ -146,7 +144,7 @@ func _ready() -> void:
 	var section_content := VBoxContainer.new()
 	section_content.custom_minimum_size = Vector2(0, 210)
 	column.add_child(section_content)
-	for section_name in (["Controls", "Sound", "Graphics", "Hangar"] if in_flight else ["Controls", "Sound", "Graphics"]):
+	for section_name in (["Controls", "Sound", "Graphics", "Ship Builder"] if in_flight else ["Controls", "Sound", "Graphics"]):
 		var section := VBoxContainer.new()
 		section.name = section_name
 		section.add_theme_constant_override("separation", 12)
@@ -170,34 +168,21 @@ func _ready() -> void:
 	var sound_section: VBoxContainer = sections["Sound"]
 	var graphics_section: VBoxContainer = sections["Graphics"]
 	var hangar_button := Button.new()
-	hangar_button.text = "Open Hangar"
+	hangar_button.text = "Open Ship Builder"
 	hangar_button.custom_minimum_size = Vector2(0, 40)
 	hangar_button.focus_mode = Control.FOCUS_NONE
 	hangar_button.pressed.connect(func(): hangar_requested.emit())
 	if in_flight:
-		sections["Hangar"].add_child(hangar_button)
+		sections["Ship Builder"].add_child(hangar_button)
 	else:
 		hangar_button.free()
-	var controls_row := HBoxContainer.new()
-	controls_section.add_child(controls_row)
-	var controls_label := Label.new()
-	controls_label.text = "CONTROL MODE"
-	controls_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	controls_row.add_child(controls_label)
-	var controls := OptionButton.new()
-	controls.name = "ControlMode"
-	controls.custom_minimum_size = Vector2(180, 0)
-	controls.add_item("WASD flight")
-	controls.add_item("RTS commands")
-	controls.select(clampi(initial_control_mode, 0, 1))
-	controls.item_selected.connect(func(index: int): control_mode_changed.emit(index))
-	controls_row.add_child(controls)
 	var bindings_button := Button.new()
 	bindings_button.text = "Key bindings"
 	bindings_button.pressed.connect(_open_key_bindings)
 	controls_section.add_child(bindings_button)
 	var controls_hint := Label.new()
-	controls_hint.text = "Select ships with left click or drag; right click to command."
+	controls_hint.text = "Left-click or drag to select; right-click to command. WASD pans the camera; Space centers on the selected ship."
+	controls_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls_hint.add_theme_font_size_override("font_size", 12)
 	controls_hint.add_theme_color_override("font_color", Color("90afc0"))
 	controls_section.add_child(controls_hint)

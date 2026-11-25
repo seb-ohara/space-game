@@ -27,11 +27,16 @@ static func write(entries: Dictionary) -> bool:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(temporary))
 	return saved
 
+static func is_draft_result(error: String) -> bool:
+	# Connectivity is checked after geometry and layer validation. A disconnected
+	# draft is safe to edit in the hangar but cannot be launched.
+	return error in ["", "Every component must connect to the ship."]
+
 static func restore_design(data: Variant) -> Array:
 	if not data is Array:
 		return []
 	var parts := MODULES.migrate_legacy(data)
-	if MODULES.validate(parts, false, false) != "":
+	if not is_draft_result(MODULES.validate(parts, false, false)):
 		return []
 	MODULES.add_legacy_command_deck(parts)
 	return parts

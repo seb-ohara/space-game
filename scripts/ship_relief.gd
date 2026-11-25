@@ -16,7 +16,7 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	var area := Rect2(bounds.position - center, bounds.size).grow(MODULES.CELL * 1.25)
 	for part in parts:
 		if MODULES.is_decoration(part) and part.type == "retro_antenna":
-			var location := Vector2(part.x, part.y) * MODULES.CELL - center
+			var location := MODULES.mount_position(part) - center
 			area = area.merge(Rect2(location - Vector2.ONE * MODULES.CELL * 0.5, Vector2.ONE * MODULES.CELL))
 	var size := Vector2i((area.size / TEXEL_SIZE).ceil())
 	var heights := PackedByteArray()
@@ -24,7 +24,7 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	var sprite_heights := PackedByteArray()
 	var masks := {}
 	for part in parts:
-		var offset := Vector2(part.x, part.y) * MODULES.CELL - center
+		var offset := MODULES.part_position(part) - center
 		var kind: String = part.type
 		if MODULES.PRESET_TEXTURES.has(kind):
 			# Bake the fitted sprite's alpha silhouette separately from its attachments.
@@ -42,8 +42,9 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 			if not masks.has(kind):
 				var texture: Texture2D = MODULES.DECORATION_TEXTURES[kind]
 				masks[kind] = texture.get_image()
-			var span := Vector2(MODULES.footprint(part).size) * MODULES.CELL
-			var texture_center := offset + (span - Vector2.ONE * MODULES.CELL) * 0.5
+			var cell_size := MODULES.cell_size_for(part)
+			var span := Vector2(MODULES.footprint(part).size) * cell_size
+			var texture_center := offset + (span - Vector2.ONE * cell_size) * 0.5
 			if kind == "retro_antenna":
 				var antenna_size := MODULES.DECORATION_TEXTURES.retro_antenna.get_size()
 				span = Vector2(antenna_size.x / antenna_size.y, 1.0) * MODULES.CELL
@@ -66,7 +67,7 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 				sample_uv = normalize * inverse_pose * translate
 			if kind == "retro_bridge":
 				var half := span * 0.5
-				polygons = [PackedVector2Array([offset + Vector2(-half.x, -half.y), offset + Vector2(half.x, -half.y), offset + Vector2(half.x, half.y), offset + Vector2(-half.x, half.y)])]
+				polygons = [PackedVector2Array([texture_center + Vector2(-half.x, -half.y), texture_center + Vector2(half.x, -half.y), texture_center + Vector2(half.x, half.y), texture_center + Vector2(-half.x, half.y)])]
 			for polygon in polygons:
 				if kind == "cockpit":
 					_stamp(heights, size, area.position, polygon, DECK_HEIGHT)
@@ -85,7 +86,7 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 			if part.has("turret"):
 				var hub := PackedVector2Array()
 				for spoke in range(12):
-					hub.append(offset + Vector2.from_angle(TAU * float(spoke) / 12.0) * 11.0)
+					hub.append(MODULES.mount_position(part) - center + Vector2.from_angle(TAU * float(spoke) / 12.0) * 11.0)
 				_stamp(heights, size, area.position, hub, DETAIL_HEIGHT)
 	if not sprite_heights.is_empty():
 		_raise_sprite_hull(heights, sprite_heights, size)

@@ -37,20 +37,37 @@ static func valid(order: Variant, ship_id: String, system_count: int) -> bool:
 		return false
 	match order.type:
 		"move": return STATE.valid_point(order.get("target_position"))
-		"hyperjump": return params.get("system") is int and params.system >= 0 and params.system < system_count
-		"mine": return order.get("target_entity_id") is String and not order.target_entity_id.is_empty() \
-			and params.get("units") is int and params.units > 0
+		"hyperjump":
+			var delay: Variant = params.get("departure_delay", 0.0)
+			return params.get("system") is int and params.system >= 0 and params.system < system_count \
+				and STATE.finite_number(delay) and delay >= 0.0
+		# An empty target means acquire the nearest deposit when the order starts.
+		"mine": return order.get("target_entity_id") is String and params.get("units") is int and params.units > 0
 		"wait": return STATE.finite_number(params.get("seconds")) and params.seconds > 0.0
 	return true
 
 static func caption(order: Dictionary) -> String:
 	if order.is_empty():
 		return "Idle"
-	var caption_text := str(order.type).capitalize()
-	if order.repeat:
-		caption_text += " (repeat)"
+	match order.type:
+		"mine": return "Mine until full" if order.repeat else "Mine %d iron" % order.parameters.units
+		"wait": return "Wait %s s%s" % [str(order.parameters.seconds), " (repeat)" if order.repeat else ""]
+		"stop": return "Stop ship"
+		_: return str(order.type).capitalize()
+
+static func activity(order: Dictionary) -> String:
+	if order.is_empty():
+		return "No active orders"
 	if order.state == "suspended":
-		caption_text += " · manual override"
-	elif order.state == "running":
-		caption_text += " · " + str(order.stage)
-	return caption_text
+		return "Paused by boost"
+	if order.state == "queued":
+		return "Ready to start"
+	match order.stage:
+		"travel": return "En route"
+		"jump": return "In transit"
+		"approach": return "Approaching asteroid"
+		"braking": return "Slowing to a stop"
+		"aiming": return "Aiming mining lasers"
+		"mining": return "Extracting ore"
+		"waiting": return "Waiting"
+		_: return "Starting"

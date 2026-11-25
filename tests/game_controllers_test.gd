@@ -2,15 +2,33 @@ extends SceneTree
 
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const MINING := preload("res://scripts/mining_controller.gd")
+const HUD := preload("res://scripts/game_hud.gd")
+const SOLAR_SYSTEM := preload("res://scripts/solar_system.gd")
 
 func _initialize() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	var map_rect := HUD.MINIMAP_RECT
+	var camera_view := Vector2(1200, 800)
+	var ship := Vector2(300, -500)
+	var chart := HUD._minimap_chart(map_rect, camera_view, ship)
+	assert((chart * ship).is_equal_approx(map_rect.get_center()))
+	assert(is_equal_approx(maxf(camera_view.x * chart.x.x / map_rect.size.x, camera_view.y * chart.y.y / map_rect.size.y), 0.25))
+	var moved_ship := ship + Vector2(120, 50)
+	var zoomed_out := HUD._minimap_chart(map_rect, camera_view * 2.0, moved_ship)
+	assert((zoomed_out * moved_ship).is_equal_approx(map_rect.get_center()))
+	assert(is_equal_approx(zoomed_out.x.x, chart.x.x * 0.5))
+	var track_area := Rect2(0, 0, 10, 10)
+	var track_lines := PackedVector2Array()
+	SOLAR_SYSTEM._append_clipped_minimap_segment(track_lines, track_area, Vector2(-5, -5), Vector2(15, 15))
+	SOLAR_SYSTEM._append_clipped_minimap_segment(track_lines, track_area, Vector2(-3, 1), Vector2(-3, 9))
+	assert(track_lines == PackedVector2Array([Vector2.ZERO, Vector2(10, 10)]))
 	var rocks := [{"position": Vector2(10, 0), "radius": 5.0, "iron": 2}, {"position": Vector2(10, 0), "radius": 2.0, "iron": 0}]
 	assert(MINING.find_target(rocks, Vector2(10, 0)) == 0)
 	assert(MINING.find_target(rocks, Vector2.ZERO) == -1)
-	assert(MINING.mining_range(5.0, 10.0) == 655.0)
+	assert(MINING.mining_range(5.0, 10.0) == 1305.0)
+	assert(MINING.mining_range(5.0, 1500.0) == 1540.0)
 	var result := MINING.tick(2, 0.0, 2.0, 10, 0.5)
 	assert(result.extracted == 1 and result.active and result.progress == 0.0)
 	result = MINING.tick(1, result.progress, 2.0, 0, 1.0)
@@ -45,7 +63,7 @@ func _run() -> void:
 	var game = load("res://main.tscn").instantiate()
 	root.add_child(game)
 	await process_frame
-	game._start_flight(GALAXY.create_map(123, 1), {}, {})
+	game._start_flight(GALAXY.create_map(123, 1), {}, {}, game.MODULES.generate_random_design(RandomNumberGenerator.new()))
 	game.set_physics_process(false)
 	game.set_process(false)
 	game.player_shield = 0.0
@@ -63,15 +81,37 @@ func _run() -> void:
 	assert(is_equal_approx(game.player_shield, 43.0) and game.projectiles.is_empty())
 	game.asteroids.assign(saved_asteroids)
 	assert(game._format_speed(0.0) == "0.0 m/s")
+	game.rts_attack_active = true
 	game.firing = true
 	var release := InputEventMouseButton.new()
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
 	game._input(release)
-	assert(not game.firing)
+	assert(game.firing, "Releasing the selection button does not interrupt a strategy attack order.")
+	var ship_position: Vector2 = game.ship_position
+	var ship_velocity: Vector2 = game.velocity
+	var camera_start: Vector2 = game._camera_center()
+	game.last_render_usec = Time.get_ticks_usec() - 100000
+	Input.action_press("camera_pan_right")
+	game._process(0.0)
+	Input.action_release("camera_pan_right")
+	assert(game._camera_center().x > camera_start.x and not game.camera_following)
+	assert(game.ship_position == ship_position and game.velocity == ship_velocity)
+	# A panned camera can cull the world renderers without hiding the ship's local orbits.
+	game.camera_zoom = 0.0005
+	var far_view := Rect2(Vector2.ONE * 100000000.0, Vector2.ONE * 1000.0)
+	var solar = game.solar_system
+	solar.update_view(game.elapsed, game._world_transform(), far_view.get_center(), Vector2.ZERO, far_view)
+	assert(solar.visible_orbiters.is_empty())
 	game.queue_redraw()
 	await process_frame
 	await process_frame
+	assert(solar.minimap_orbiters.has(0))
+	var planet = solar.minimap_orbiters[0][0]
+	assert(planet.track == null and planet.visual == null and planet.label.begins_with("SOL "))
+	var star_center: Vector2 = solar.system_centers[0]
+	var relative: Vector2 = (planet.center - star_center - planet.center_offset).rotated(-planet.orbit_angle) / planet.axes
+	assert(is_equal_approx(relative.length(), 1.0))
 	game.free()
 	print("Game controller checks passed")
 	quit()

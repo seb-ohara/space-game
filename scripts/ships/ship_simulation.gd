@@ -2,6 +2,8 @@ extends RefCounted
 ## Shared travel math; no rendering, scene nodes or input.
 
 const STATE := preload("res://scripts/ships/ship_state.gd")
+const JUMP_ARRIVAL_RADIUS := 4.0
+const JUMP_ARRIVAL_SPEED := 8.0
 
 static func integrate(ship: Dictionary, motion: Vector2, bounds: Vector2) -> void:
 	var p: PackedFloat64Array = ship.galaxy_position

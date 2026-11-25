@@ -7,9 +7,10 @@ const QUEUE := preload("res://scripts/ships/ship_order_queue.gd")
 const MINING := preload("res://scripts/mining_controller.gd")
 const MODULES := preload("res://scripts/ship_modules.gd")
 const NAV := preload("res://scripts/flight_navigation.gd")
+const SIMULATION := preload("res://scripts/ships/ship_simulation.gd")
 const STALL_LIMIT := 60.0
 
-func tick(ship: Dictionary, delta: float, resolve_jump: Callable, resolve_rock: Callable, extract: Callable) -> void:
+func tick(ship: Dictionary, delta: float, resolve_jump: Callable, resolve_rock: Callable, extract: Callable, find_rock: Callable) -> void:
 	var order := QUEUE.current(ship)
 	if order.is_empty():
 		return
@@ -18,7 +19,7 @@ func tick(ship: Dictionary, delta: float, resolve_jump: Callable, resolve_rock: 
 	match order.type:
 		"move": _move(ship, order, profile, delta)
 		"hyperjump": _jump(ship, order, profile, delta, resolve_jump)
-		"mine": _mine(ship, order, profile, delta, resolve_rock, extract)
+		"mine": _mine(ship, order, profile, delta, resolve_rock, extract, find_rock)
 		_: _hold(ship, order, delta)
 
 func suspend(ship: Dictionary) -> void:
@@ -47,6 +48,13 @@ func _jump(ship: Dictionary, order: Dictionary, profile: Dictionary, delta: floa
 		QUEUE.finish(ship, "failed", "Ship cannot hyperjump.")
 		return
 	var progress: Dictionary = order.progress
+	var delay := float(order.parameters.get("departure_delay", 0.0))
+	var waited := float(progress.get("waited", 0.0))
+	if waited + 0.000001 < delay:
+		order.stage = "waiting"
+		progress.waited = minf(delay, waited + delta)
+		ship.navigation = {"mode": "hold"}
+		return
 	if not progress.has("travel_target"):
 		var target: PackedFloat64Array = resolve.call(ship, order.parameters.system)
 		if target.is_empty():
@@ -55,7 +63,9 @@ func _jump(ship: Dictionary, order: Dictionary, profile: Dictionary, delta: floa
 		progress.travel_target = target
 		progress.jump_distance = STATE.relative(target, ship.galaxy_position).length()
 	var distance := STATE.relative(progress.travel_target, ship.galaxy_position).length()
-	if distance <= 4.0 and (ship.velocity as Vector2).length() <= 8.0:
+	# Flight snaps to the slot and clears linear and angular motion before
+	# releasing the order; a still-moving ship must not be handed off to drift.
+	if distance <= SIMULATION.JUMP_ARRIVAL_RADIUS and (ship.velocity as Vector2).is_zero_approx() and is_zero_approx(float(ship.angular_velocity)):
 		QUEUE.finish(ship, "completed", "Hyperjump arrival confirmed.")
 	elif not _track_progress(order, distance, delta):
 		QUEUE.finish(ship, "failed", "No progress toward jump arrival.")
@@ -64,25 +74,36 @@ func _jump(ship: Dictionary, order: Dictionary, profile: Dictionary, delta: floa
 		ship.navigation = {"mode": "jump", "target": progress.travel_target, "system": order.parameters.system,
 			"distance": progress.jump_distance, "time": 0.0}
 
-func _mine(ship: Dictionary, order: Dictionary, profile: Dictionary, delta: float, resolve: Callable, extract: Callable) -> void:
+func _mine(ship: Dictionary, order: Dictionary, profile: Dictionary, delta: float, resolve: Callable, extract: Callable, find_rock: Callable) -> void:
 	if profile.mining_rate <= 0.0:
 		QUEUE.finish(ship, "failed", "No mining laser equipped.")
 		return
+	if profile.cargo_capacity <= 0:
+		QUEUE.finish(ship, "blocked", "Ship has no cargo capacity.")
+		return
+	var progress: Dictionary = order.progress
+	var mined := int(progress.get("mined", 0))
 	var free := CAPS.available_space(profile, ship.cargo)
 	if free <= 0:
-		QUEUE.finish(ship, "blocked", "Cargo hold is full.")
+		QUEUE.finish(ship, "completed" if order.repeat else "blocked", "Cargo hold is full. Mined %d iron." % mined)
 		return
-	var rock: Dictionary = resolve.call(order.target_entity_id)
-	if rock.is_empty():
-		QUEUE.finish(ship, "failed", "Asteroid could not be found.")
-		return
-	if rock.iron <= 0:
-		QUEUE.finish(ship, "blocked", "Asteroid deposit is exhausted.")
-		return
+	var rock: Dictionary = {} if order.target_entity_id == "" else resolve.call(order.target_entity_id)
+	if rock.is_empty() or rock.iron <= 0:
+		var next_id: String = find_rock.call(ship)
+		if next_id.is_empty():
+			QUEUE.finish(ship, "blocked", "No ore left in this system. Mined %d iron." % mined)
+			return
+		rock = resolve.call(next_id)
+		if rock.is_empty() or rock.iron <= 0:
+			QUEUE.finish(ship, "failed", "Next asteroid unavailable. Mined %d iron." % mined)
+			return
+		order.target_entity_id = next_id
+		# Keep the total across the run; approach and turret progress belong to each rock.
+		order.progress = {"mined": mined}
+		progress = order.progress
 	var offset := STATE.relative(rock.galaxy_position, ship.galaxy_position)
 	var distance := offset.length()
 	var reach := MINING.mining_range(rock.radius, float(ship.bounds_size.y) * 0.5)
-	var progress: Dictionary = order.progress
 	if distance > reach * 0.94:
 		progress.aim = 0.0
 		if not CAPS.can_perform(profile, "move"):
@@ -104,7 +125,6 @@ func _mine(ship: Dictionary, order: Dictionary, profile: Dictionary, delta: floa
 		order.stage = "aiming"
 		return
 	order.stage = "mining"
-	var mined := int(progress.get("mined", 0))
 	var needed := free if order.repeat else mini(free, int(order.parameters.units) - mined)
 	var result := MINING.tick(rock.iron, float(progress.get("fraction", 0.0)), profile.mining_rate, needed, delta)
 	if result.extracted > 0:

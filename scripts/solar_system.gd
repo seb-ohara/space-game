@@ -18,6 +18,9 @@ const MOON_ICON_ORBIT_FADE_NEAR := 8.0
 const MOON_ICON_ORBIT_FADE_FAR := 18.0
 const PLANET_ICON_RADIUS := 3.0
 const MOON_ICON_RADIUS := 2.0
+const MINIMAP_LABEL_SIZE := 11
+const MINIMAP_MOON_MARKER_ORBIT := 4.0
+const MINIMAP_MOON_LABEL_ORBIT := 9.0
 
 class Orbiter:
 	var definition: Dictionary
@@ -30,6 +33,7 @@ class Orbiter:
 	var segments := 0
 	var axes := Vector2.ZERO
 	var eccentricity := 0.0
+	var orbit_angle := 0.0
 	var center_offset := Vector2.ZERO
 	var circumference := 0.0
 	var body_radius := 1.0
@@ -51,8 +55,11 @@ var origin_y := 0.0
 var last_lookup := Vector2.INF
 var last_nearest := 0
 var minimap_transform := Transform2D()
+var minimap_rect := Rect2()
 var minimap_points := PackedVector2Array()
 var minimap_colors := PackedColorArray()
+var minimap_system_indices := PackedInt32Array()
+var minimap_orbiters := {}
 var dot_texture: ImageTexture
 var surface: NoiseTexture2D
 
@@ -60,6 +67,7 @@ func configure(data: Dictionary, formed_systems: Dictionary) -> void:
 	galaxy = data
 	systems = data.systems
 	contents_by_system = formed_systems
+	minimap_orbiters.clear()
 	set_origin(0.0, 0.0)
 
 func set_origin(x: float, y: float) -> void:
@@ -74,7 +82,7 @@ func set_origin(x: float, y: float) -> void:
 			star.position = system_centers[index] - star.size * 0.5
 	world_bounds = Rect2(local_point(0.0, 0.0), galaxy.world_size)
 	last_lookup = Vector2.INF
-	minimap_points.clear()
+	minimap_rect = Rect2()
 
 func local_point(x: float, y: float) -> Vector2:
 	return Vector2(x - origin_x, y - origin_y)
@@ -114,35 +122,37 @@ func _ready() -> void:
 	surface.noise = noise
 	surface.seamless = true
 
-func _create_orbiter(definition: Dictionary, parent: Orbiter = null) -> Orbiter:
+func _create_orbiter(definition: Dictionary, parent: Orbiter, with_visuals: bool) -> Orbiter:
 	var orbiter := Orbiter.new()
 	orbiter.definition = definition
 	orbiter.parent = parent
-	orbiter.track = _make_orbit(dot_texture)
-	orbiter.track.rotation = float(definition.get("orbit_angle", 0.0))
+	orbiter.orbit_angle = float(definition.get("orbit_angle", 0.0))
 	orbiter.eccentricity = float(definition.get("eccentricity", 0.0))
 	var major := float(definition.orbit)
 	var minor := major * sqrt(1.0 - orbiter.eccentricity * orbiter.eccentricity)
 	orbiter.axes = Vector2(major, minor)
-	orbiter.center_offset = Vector2(-major * orbiter.eccentricity, 0.0).rotated(orbiter.track.rotation)
-	orbiter.circumference = PI * (3.0 * (major + minor) - sqrt((3.0 * major + minor) * (major + 3.0 * minor)))
-	orbiter.body_radius = float(definition.radius) * float(definition.extent)
-	orbiter.visual = _make_body(definition, self)
-	orbiter.visual.top_level = true
+	orbiter.center_offset = Vector2(-major * orbiter.eccentricity, 0.0).rotated(orbiter.orbit_angle)
+	if with_visuals:
+		orbiter.circumference = PI * (3.0 * (major + minor) - sqrt((3.0 * major + minor) * (major + 3.0 * minor)))
+		orbiter.body_radius = float(definition.radius) * float(definition.extent)
+		orbiter.track = _make_orbit(dot_texture)
+		orbiter.track.rotation = orbiter.orbit_angle
+		orbiter.visual = _make_body(definition, self)
+		orbiter.visual.top_level = true
 	return orbiter
 
-func _build_system_orbiters(index: int) -> Array[Orbiter]:
+func _build_system_orbiters(index: int, with_visuals: bool = true) -> Array[Orbiter]:
 	var orbiters: Array[Orbiter] = []
 	var system_name := str(systems[index].name).to_upper()
 	var planets: Array = system_contents(index).planets
 	for planet_index in planets.size():
 		var definition: Dictionary = planets[planet_index]
-		var planet := _create_orbiter(definition)
+		var planet := _create_orbiter(definition, null, with_visuals)
 		planet.label = "%s %s" % [system_name, _roman(planet_index + 1)]
 		orbiters.append(planet)
 		var moons: Array = definition.moons
 		for moon_index in moons.size():
-			var moon := _create_orbiter(moons[moon_index], planet)
+			var moon := _create_orbiter(moons[moon_index], planet, with_visuals)
 			moon.label = "%s%s" % [planet.label, _moon_suffix(moon_index)]
 			orbiters.append(moon)
 	# Gate the whole system's markers on its innermost planetary orbit so outer
@@ -232,29 +242,154 @@ func nearest_system(point: Vector2) -> int:
 func light_direction_at(point: Vector2) -> Vector2:
 	return point.direction_to(system_centers[nearest_system(point)])
 
-func draw_minimap(canvas: CanvasItem, chart: Transform2D) -> void:
+func draw_minimap(canvas: CanvasItem, chart: Transform2D, map_rect: Rect2, clock: float) -> void:
 	var map_scale := chart.x.x
-	if systems.size() > 128:
-		if minimap_transform != chart or minimap_points.is_empty():
-			minimap_transform = chart
-			minimap_points.clear()
-			minimap_colors.clear()
-			for index in systems.size():
-				var point := chart * system_centers[index]
-				minimap_points.append(point - Vector2(0.56, 0.0))
-				minimap_points.append(point + Vector2(0.56, 0.0))
-				minimap_colors.append(systems[index].color)
-		canvas.draw_multiline_colors(minimap_points, minimap_colors, 1.0, true)
+	var orbit_reach := (GALAXY.MAX_DISC_RADIUS + 100000.0) * GALAXY.orbit_scale_for(galaxy.generator_version) * map_scale
+	var show_orbits := orbit_reach >= MIN_TRACK_RADIUS_PIXELS
+	var dot_cloud := systems.size() > 128 and not show_orbits
+	_update_minimap_stars(chart, map_rect, dot_cloud)
+
+	var planets: Array[Dictionary] = []
+	var moons: Array[Dictionary] = []
+	if show_orbits:
+		_minimap_bodies(canvas, chart, map_rect, clock, orbit_reach, planets, moons)
 	else:
-		var star_marker := 1.65 if systems.size() > 24 else 2.5
-		for index in systems.size():
-			var system := systems[index]
-			canvas.draw_circle(chart * system_centers[index], maxf(star_marker, system.radius * map_scale), system.color)
-	for index in visible_orbiters:
-		for orbiter: Orbiter in visible_orbiters[index]:
-			if orbiter.axes.x * map_scale < 2.0:
+		minimap_orbiters.clear()
+
+	var star_labels: Array[Dictionary] = []
+	var occupied: Array[Rect2] = [Rect2(map_rect.get_center() - Vector2.ONE * 9.0, Vector2.ONE * 18.0)]
+	if dot_cloud and not minimap_points.is_empty():
+		canvas.draw_multiline_colors(minimap_points, minimap_colors, 1.0, true)
+	var label_cells := {}
+	for index in minimap_system_indices:
+		var system := systems[index]
+		var point := chart * system_centers[index]
+		var radius := clampf(system.radius * map_scale, 2.5, 7.0)
+		if dot_cloud:
+			# Keep all the dots, but only offer one name per cell in crowded views.
+			var cell := Vector2i((point - map_rect.position) / Vector2(42.0, 24.0))
+			if label_cells.has(cell):
 				continue
-			canvas.draw_circle(chart * orbiter.center, maxf(1.2, orbiter.definition.radius * map_scale), orbiter.definition.color)
+			label_cells[cell] = true
+		else:
+			_draw_minimap_marker(canvas, map_rect, point, radius, system.color, occupied)
+		var name := str(system.name) if show_orbits else "%s system" % system.name
+		star_labels.append({"point": point, "radius": radius, "name": name, "color": system.color})
+	for marker in planets + moons:
+		_draw_minimap_marker(canvas, map_rect, marker.point, marker.radius, marker.color, occupied)
+	for label in star_labels + planets + moons:
+		if not label.name.is_empty():
+			_draw_minimap_label(canvas, map_rect.grow(-3.0), label, occupied)
+
+func _update_minimap_stars(chart: Transform2D, map_rect: Rect2, dot_cloud: bool) -> void:
+	if minimap_transform == chart and minimap_rect == map_rect:
+		return
+	minimap_transform = chart
+	minimap_rect = map_rect
+	minimap_points.clear()
+	minimap_colors.clear()
+	minimap_system_indices.clear()
+	var marker_area := map_rect.grow(-2.0)
+	for index in systems.size():
+		var point := chart * system_centers[index]
+		if not marker_area.has_point(point):
+			continue
+		minimap_system_indices.append(index)
+		if dot_cloud:
+			minimap_points.append(point - Vector2(0.56, 0.0))
+			minimap_points.append(point + Vector2(0.56, 0.0))
+			minimap_colors.append(systems[index].color)
+
+func _minimap_bodies(canvas: CanvasItem, chart: Transform2D, map_rect: Rect2, clock: float, orbit_reach: float,
+		planets: Array[Dictionary], moons: Array[Dictionary]) -> void:
+	var system_area := map_rect.grow(orbit_reach)
+	var track_area := map_rect.grow(-1.0)
+	var marker_area := map_rect.grow(-2.0)
+	for index in minimap_orbiters.keys():
+		if not system_area.has_point(chart * system_centers[index]):
+			minimap_orbiters.erase(index)
+	for index in systems.size():
+		var star_center := system_centers[index]
+		if not system_area.has_point(chart * star_center):
+			continue
+		# The ship-centered minimap can see systems outside a panned camera's view.
+		# Build only their motion data, without allocating world-rendering nodes.
+		if not minimap_orbiters.has(index):
+			minimap_orbiters[index] = _build_system_orbiters(index, false)
+		for orbiter: Orbiter in minimap_orbiters[index]:
+			var moon := orbiter.parent != null
+			var axes := orbiter.axes * chart.x.x
+			if axes.x < (MINIMAP_MOON_MARKER_ORBIT if moon else MIN_TRACK_RADIUS_PIXELS):
+				continue
+			_update_position(orbiter, star_center, clock)
+			var focus := orbiter.parent.center if moon else star_center
+			var orbit_center := chart * focus + orbiter.center_offset * chart.x.x
+			_draw_minimap_orbit(canvas, track_area, orbit_center, axes, orbiter.orbit_angle, moon)
+			var point := chart * orbiter.center
+			if marker_area.has_point(point):
+				var radius := clampf(orbiter.definition.radius * chart.x.x, 1.4 if moon else 2.0, 5.0)
+				var name := "" if moon and axes.x < MINIMAP_MOON_LABEL_ORBIT else orbiter.label
+				var markers := moons if moon else planets
+				markers.append({"point": point, "radius": radius, "name": name, "color": orbiter.definition.color})
+
+func _draw_minimap_orbit(canvas: CanvasItem, area: Rect2, center: Vector2, axes: Vector2, angle: float, moon: bool) -> void:
+	if not _orbit_intersects_view(center, axes, 1.0, area):
+		return
+	# Increase sampling on close passes so large orbits don't turn into long chords.
+	var segments := clampi(ceili(PI * sqrt(axes.x / 0.7)), 24, 2048)
+	var ellipse := Transform2D(angle, axes, 0.0, center)
+	var lines := PackedVector2Array()
+	var start := ellipse * Vector2.RIGHT
+	for step in range(1, segments + 1):
+		var end := ellipse * Vector2.from_angle(TAU * step / segments)
+		_append_clipped_minimap_segment(lines, area, start, end)
+		start = end
+	if not lines.is_empty():
+		canvas.draw_multiline(lines, Color(ORBIT_COLOR, 0.25 if moon else 0.46), 1.0, true)
+
+static func _append_clipped_minimap_segment(lines: PackedVector2Array, area: Rect2, start: Vector2, end: Vector2) -> void:
+	var delta := end - start
+	var enter := 0.0
+	var exit := 1.0
+	for axis in 2:
+		if is_zero_approx(delta[axis]):
+			if start[axis] < area.position[axis] or start[axis] > area.end[axis]:
+				return
+			continue
+		var a := (area.position[axis] - start[axis]) / delta[axis]
+		var b := (area.end[axis] - start[axis]) / delta[axis]
+		enter = maxf(enter, minf(a, b))
+		exit = minf(exit, maxf(a, b))
+		if enter >= exit:
+			return
+	lines.append(start + delta * enter)
+	lines.append(start + delta * exit)
+
+func _draw_minimap_marker(canvas: CanvasItem, map_rect: Rect2, point: Vector2, radius: float, color: Color,
+		occupied: Array[Rect2]) -> void:
+	var clearance := (point - map_rect.position).min(map_rect.end - point)
+	var visible_radius := minf(radius, minf(clearance.x, clearance.y) - 1.0)
+	if visible_radius > 0.0:
+		canvas.draw_circle(point, visible_radius, color, true, -1.0, true)
+		occupied.append(Rect2(point - Vector2.ONE * visible_radius, Vector2.ONE * visible_radius * 2.0))
+
+func _draw_minimap_label(canvas: CanvasItem, area: Rect2, label: Dictionary, occupied: Array[Rect2]) -> void:
+	var font := ThemeDB.fallback_font
+	var text: String = label.name
+	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, MINIMAP_LABEL_SIZE)
+	var gap := float(label.radius) + 4.0
+	var offsets := [Vector2(gap, -text_size.y * 0.5), Vector2(-gap - text_size.x, -text_size.y * 0.5),
+		Vector2(-text_size.x * 0.5, gap), Vector2(-text_size.x * 0.5, -gap - text_size.y)]
+	for offset: Vector2 in offsets:
+		var bounds := Rect2(label.point + offset, text_size).grow(1.0)
+		if not area.encloses(bounds) or occupied.any(func(rect: Rect2) -> bool: return rect.intersects(bounds)):
+			continue
+		occupied.append(bounds)
+		var baseline: Vector2 = label.point + offset + Vector2(0.0, font.get_ascent(MINIMAP_LABEL_SIZE))
+		var tint: Color = label.color
+		canvas.draw_string(font, baseline + Vector2.ONE, text, HORIZONTAL_ALIGNMENT_LEFT, -1, MINIMAP_LABEL_SIZE, Color("0b1927"))
+		canvas.draw_string(font, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, MINIMAP_LABEL_SIZE, tint.lerp(Color.WHITE, 0.65))
+		return
 
 func draw_belt_markers(canvas: CanvasItem, camera: Transform2D, viewport: Rect2) -> void:
 	var zoom := camera.x.length()
@@ -279,10 +414,11 @@ func _update_position(orbiter: Orbiter, star_center: Vector2, clock: float) -> v
 	var parent_y := parent.center_y if parent != null else star_center.y
 	var speed_scale := MOON_ORBIT_SPEED_SCALE if parent != null else PLANET_ORBIT_SPEED_SCALE
 	var anomaly := GALAXY.eccentric_anomaly(float(definition.phase) + TAU * fposmod(clock * speed_scale, definition.period) / definition.period, orbiter.eccentricity)
-	orbiter.track.position = Vector2(parent_x, parent_y) + orbiter.center_offset
+	if orbiter.track != null:
+		orbiter.track.position = Vector2(parent_x, parent_y) + orbiter.center_offset
 	var offset_x := cos(anomaly) * orbiter.axes.x
 	var offset_y := sin(anomaly) * orbiter.axes.y
-	var orbit_angle := orbiter.track.rotation
+	var orbit_angle := orbiter.orbit_angle
 	orbiter.center_x = parent_x + orbiter.center_offset.x + offset_x * cos(orbit_angle) - offset_y * sin(orbit_angle)
 	orbiter.center_y = parent_y + orbiter.center_offset.y + offset_x * sin(orbit_angle) + offset_y * cos(orbit_angle)
 	orbiter.center = Vector2(orbiter.center_x, orbiter.center_y)

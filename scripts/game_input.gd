@@ -56,45 +56,20 @@ func _input(event: InputEvent) -> void:
 			game.get_viewport().set_input_as_handled()
 			game._queue_flight_redraw()
 			return
-	if event is InputEventKey and event.pressed and not event.echo and event.is_action_pressed("cycle_target") and game.control_mode == 1 and not is_instance_valid(game.settings_layer) and not game.radial_menu_open:
+	if event is InputEventKey and event.pressed and not event.echo and event.is_action_pressed("cycle_target") and not is_instance_valid(game.settings_layer) and not game.radial_menu_open:
 		game._cycle_target()
 		game.get_viewport().set_input_as_handled()
 		game._queue_flight_redraw()
 		return
-	if event is InputEventKey and event.is_action("boost_recenter") and not event.echo and game.control_mode == 0 and game.hyperjump_time < 0.0:
-		game._ensure_ship_cache()
-		if game.has_flight_controls and not game.simulation_clock.paused and not is_instance_valid(game.settings_layer):
-			if game.sustained_boost_enabled:
-				if event.pressed:
-					game._set_sustained_boost(false)
-			elif event.pressed and not game.boost_charging:
-				game.boost_charging = true
-				game.boost_charge = 0.0
-			elif not event.pressed and game.boost_charging:
-				game._launch_boost()
-			game.get_viewport().set_input_as_handled()
-		return
-	if event is InputEventKey and event.is_action("fire") and not event.echo and game.control_mode == 0 and not is_instance_valid(game.settings_layer):
-		game.firing = event.pressed and not game.simulation_clock.paused and not game._combat_locked()
-		game.get_viewport().set_input_as_handled()
-		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
-		if is_instance_valid(game.fleet_context_menu) and game.fleet_context_menu.visible:
-			game.fleet_context_menu.hide()
-			game.get_viewport().set_input_as_handled()
-			return
 		if is_instance_valid(game.settings_layer):
 			game._close_settings()
 		else:
 			game._open_settings()
 		game.get_viewport().set_input_as_handled()
 		return
-	# Stop firing even when the pointer is over a menu control.
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-		if game.rts_dragging:
-			game._finish_rts_selection(event.position)
-		else:
-			game.firing = false
+	if game.rts_dragging and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		game._finish_rts_selection(event.position)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if game.radial_menu_open and event is InputEventMouseMotion:
@@ -105,8 +80,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		game._queue_flight_redraw()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.is_action_pressed("recenter") or (game.control_mode == 1 and event.is_action_pressed("boost_recenter")):
-			game.camera_following = true
+		if event.is_action_pressed("recenter") or event.is_action_pressed("boost_recenter"):
+			game._center_camera_on_selection()
 		elif event.is_action_pressed("cycle_target"):
 			game._cycle_target()
 		else:
@@ -124,7 +99,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if not event.pressed:
 			return
-		if not game.order_target_request.is_empty() and event.button_index == MOUSE_BUTTON_LEFT and not event.shift_pressed:
+		if not game.order_target_request.is_empty() and event.button_index == MOUSE_BUTTON_RIGHT and not event.shift_pressed:
 			game._pick_order_target(event.position)
 			game.get_viewport().set_input_as_handled()
 			return
@@ -147,7 +122,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				game._show_hyperjump_context(system_index, event.position)
 				game.get_viewport().set_input_as_handled()
 				return
-		if game.hyperjump_time >= 0.0 and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]:
+		if game.hyperjump_time >= 0.0 and event.button_index in [MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]:
 			game.get_viewport().set_input_as_handled()
 			return
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
@@ -159,7 +134,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			game.get_viewport().set_input_as_handled()
 			game._queue_flight_redraw()
 			return
-		if game.sustained_boost_enabled and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		if game.sustained_boost_enabled and event.button_index == MOUSE_BUTTON_RIGHT:
 			game._steer_sustained_boost(event.position)
 			game.get_viewport().set_input_as_handled()
 			return
@@ -171,7 +146,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			if not game.selected_fleet.is_empty():
 				game._rts_issue_order(event.position, event.shift_pressed)
-			elif game.control_mode == 0:
+			else:
 				game._select_target_at(game._screen_to_world(event.position, false))
 			game.get_viewport().set_input_as_handled()
 			game._queue_flight_redraw()

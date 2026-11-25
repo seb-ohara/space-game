@@ -6,8 +6,7 @@ const LOADOUT := preload("res://scripts/ship_loadout.gd")
 const SLOT_WEAPONS := ["laser", "machine_gun", "missile", "railgun", "miner"]
 
 static func build(parts: Array, admin: Dictionary, base: Dictionary) -> Dictionary:
-	# Legacy visible turret art no longer participates in player weapon rules.
-	# Normalize slot mounts once and share them with the actual firing code.
+	# Normalize saved hardpoints or editor-mounted modules into the same firing slots.
 	var hull := parts.duplicate(true)
 	for part: Dictionary in hull:
 		part.erase("turret")
@@ -26,7 +25,7 @@ static func build(parts: Array, admin: Dictionary, base: Dictionary) -> Dictiona
 	if admin.has("boost"):
 		result.boost = maxf(0.0, float(admin.boost)) * speed_unit
 	result.hyperdrive = maxf(0.0, float(admin.get("hyperdrive", float(base.hyperdrive) * float(result.speed) / speed_unit))) * speed_unit
-	var mounts: Array = LOADOUT.slots(admin)
+	var mounts: Array = LOADOUT.slots(admin) if admin.has("module_slots") or parts.is_empty() or not parts[0].get("fine_grid", false) else _editor_mounts(parts)
 	for slot: Dictionary in mounts:
 		match slot.type:
 			"shield": result.shield += 100.0
@@ -45,6 +44,21 @@ static func build(parts: Array, admin: Dictionary, base: Dictionary) -> Dictiona
 	result.combat_strength = result.weapon
 	result.cargo_capacity = maxi(0, int(result.cargo))
 	return result
+
+static func _editor_mounts(parts: Array) -> Array:
+	var mounts := []
+	var bounds := MODULES.bounds(parts)
+	for part: Dictionary in parts:
+		if part.type not in MODULES.TURRET_BASE_TYPES:
+			continue
+		var kind: String = part.get("turret", "")
+		if kind in ["retro_machine_gun", "long_machine_gun"]:
+			kind = "machine_gun"
+		if kind not in SLOT_WEAPONS:
+			continue
+		var fraction := (MODULES.mount_position(part) - bounds.position) / bounds.size
+		mounts.append({"type": kind, "x": fraction.x, "y": fraction.y})
+	return LOADOUT.slots({"module_slots": mounts})
 
 static func available_space(profile: Dictionary, cargo: Dictionary) -> int:
 	return maxi(0, int(profile.cargo_capacity) - int(cargo.get("iron", 0)) - int(cargo.get("tritium", 0)))

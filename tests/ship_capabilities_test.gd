@@ -6,7 +6,7 @@ const BASE := {"speed": 390.0, "acceleration": 380.0, "turn": 2.0, "boost": 6000
 	"hyperdrive": 25000.0, "speed_unit": 112.5}
 
 func _initialize() -> void:
-	for preset: String in MODULES.PRESET_NAMES.values():
+	for preset: String in MODULES.PRESET_LENGTHS_METERS:
 		var profile := CAPS.build(MODULES.preset_design(preset), {}, BASE)
 		assert(profile.normal_speed > 0.0 and CAPS.can_perform(profile, "move"))
 		assert(is_equal_approx(profile.normal_speed, profile.speed * BASE.speed))
