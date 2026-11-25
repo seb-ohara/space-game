@@ -125,6 +125,7 @@ var game_hud = GAME_HUD.new(self)
 const SHIP_STATE := preload("res://scripts/ships/ship_state.gd")
 const SHIP_REGISTRY := preload("res://scripts/ships/ship_registry.gd")
 const SHIP_SIMULATION := preload("res://scripts/ships/ship_simulation.gd")
+const SHIP_CAPABILITIES := preload("res://scripts/ships/ship_capabilities.gd")
 const FLEET_VIEW_RANGE := 32000.0
 const FLEET_VIEW_EXIT_RANGE := 40000.0
 var ship_registry := SHIP_REGISTRY.new()
@@ -992,7 +993,7 @@ func _prepare_fleet_stats(ship: Dictionary) -> void:
 	ship.bounds_size = bounds.size * float(ship.ship_scale)
 	ship.radius = ship.bounds_size.length() * 0.5
 	ship.fleet_stats = _stats_with_admin(ship.parts, ship.admin)
-	ship.can_fly = MODULES.has_command_deck(ship.parts)
+	ship.can_fly = SHIP_CAPABILITIES.can_perform(ship.fleet_stats, "move")
 
 func _save_active_fleet_ship() -> void:
 	var ship: Dictionary = fleet[active_fleet_index]
@@ -1348,8 +1349,7 @@ func _update_boost_destination(boost_speed: float, boost_acceleration: float, sh
 	thrust = move_toward(thrust, alignment if speed > 5.0 else 0.0, delta * THROTTLE_RAMP)
 
 func _can_hyperjump() -> bool:
-	var ship := _current_ship()
-	return has_flight_controls and float(ship.speed) > 0.0
+	return SHIP_CAPABILITIES.can_perform(_custom_stats(), "hyperjump")
 
 func _close_hyperjump_chart() -> void:
 	hyperjump_context_button.hide()
@@ -1634,7 +1634,7 @@ func _ensure_ship_cache() -> void:
 	cached_ship_stats = _stats_with_admin(custom_parts, overrides)
 	cached_ship_bounds = MODULES.bounds(custom_parts)
 	cached_ship_scale = MODULES.length_scale(cached_ship_bounds.size.y / MODULES.WORLD_UNITS_PER_METER, overrides)
-	has_flight_controls = MODULES.has_command_deck(custom_parts)
+	has_flight_controls = cached_ship_stats.has_command_deck
 	cached_engines.clear()
 	cached_turret_mounts.clear()
 	for light in player_visual.engine_lights:
@@ -1657,10 +1657,10 @@ func _ensure_ship_cache() -> void:
 		_collect_engine_nozzles(part, center, cached_engines, cached_ship_scale)
 		if uses_shaped_hull and MODULES.is_exterior_structure(part):
 			cached_hull_shapes.append_array(MODULES.material_polygons(part, (Vector2(part.x, part.y) * MODULES.CELL - center) * cached_ship_scale, MODULES.CELL * cached_ship_scale))
-	var slots := LOADOUT.slots(overrides)
+	var slots: Array = cached_ship_stats.slots
 	for index in slots.size():
 		var slot: Dictionary = slots[index]
-		if slot.type not in ["laser", "machine_gun", "missile", "railgun", "miner"]:
+		if slot.type not in SHIP_CAPABILITIES.SLOT_WEAPONS:
 			continue
 		cached_turret_mounts.append({"x": 0, "y": 0, "slot_index": index, "turret": slot.type,
 			"local_position": LOADOUT.local_position(slot, cached_ship_bounds, cached_ship_scale)})
@@ -1739,35 +1739,15 @@ func _custom_stats() -> Dictionary:
 	return cached_ship_stats
 
 func _stats_with_admin(parts: Array, admin: Dictionary) -> Dictionary:
-	# Legacy visible mounts remain in saved designs for compatibility, but no
-	# longer contribute player weapon stats or power consumption.
-	var hull_parts := parts.duplicate(true)
-	for part in hull_parts:
-		part.erase("turret")
-	var totals := MODULES.stats(hull_parts)
-	var speed_unit := MODULES.WORLD_UNITS_PER_METER * 1000.0 / DISPLAY_SPEED_SCALE
-	totals.boost = BOOST_TRAVEL_SPEED * float(totals.speed)
-	if admin.has("health"):
-		totals.health = float(admin.health)
-	if admin.has("shield"):
-		totals.shield = float(admin.shield)
-	if admin.has("cargo"):
-		totals.cargo = float(admin.cargo)
-	if admin.has("speed"):
-		totals.speed = float(admin.speed) * speed_unit / top_speed
-	if admin.has("acceleration"):
-		totals.acceleration = float(admin.acceleration) * speed_unit / acceleration
-	if admin.has("turn"):
-		totals.maneuver = deg_to_rad(float(admin.turn)) / turn_speed
-	if admin.has("boost"):
-		totals.boost = float(admin.boost) * speed_unit
-	for slot in LOADOUT.slots(admin):
-		if slot.type == "shield":
-			totals.shield += 100.0
-		elif slot.type == "shield_recharge":
-			totals.shield_recharge += 2.0
-	totals.hyperdrive = float(admin.get("hyperdrive", HYPERJUMP_TRAVEL_SPEED * float(totals.speed) / speed_unit)) * speed_unit
-	return totals
+	return SHIP_CAPABILITIES.build(parts, admin, {"speed": top_speed, "acceleration": acceleration, "turn": turn_speed,
+		"boost": BOOST_TRAVEL_SPEED, "hyperdrive": HYPERJUMP_TRAVEL_SPEED, "speed_unit": MODULES.WORLD_UNITS_PER_METER * 1000.0 / DISPLAY_SPEED_SCALE})
+
+func _ship_capabilities(index: int) -> Dictionary:
+	var ship: Dictionary = fleet[index]
+	var profile := (_custom_stats() if index == active_fleet_index else ship.fleet_stats as Dictionary).duplicate()
+	var cargo := {"iron": iron, "tritium": tritium} if index == active_fleet_index else ship.cargo as Dictionary
+	profile.available_cargo_space = SHIP_CAPABILITIES.available_space(profile, cargo)
+	return profile
 
 func _admin_values(ship: Dictionary) -> Dictionary:
 	var admin: Dictionary = ship.get("admin", {})
@@ -1858,7 +1838,7 @@ func _player_max_shield() -> float:
 	return _custom_stats().shield
 
 func _cargo_available() -> bool:
-	return iron + tritium < int(_custom_stats().cargo)
+	return SHIP_CAPABILITIES.available_space(_custom_stats(), {"iron": iron, "tritium": tritium}) > 0
 
 func _ship_size() -> Vector2:
 	_ensure_ship_cache()
@@ -2505,7 +2485,7 @@ func _update_mining(delta: float) -> void:
 	if ship_position.distance_to(asteroid.position) > MINING_CONTROLLER.mining_range(asteroid.radius, _ship_half_length()):
 		return
 	var rate := _aimed_mining_rate(asteroid.position)
-	var capacity_left := int(_custom_stats().cargo) - iron - tritium
+	var capacity_left := SHIP_CAPABILITIES.available_space(_custom_stats(), {"iron": iron, "tritium": tritium})
 	var result := MINING_CONTROLLER.tick(asteroid.iron, mining_progress, rate, capacity_left, delta)
 	mining_progress = result.progress
 	mining = result.active
@@ -2918,9 +2898,9 @@ func _step_parked_navigation(ship: Dictionary, delta: float) -> float:
 	var stats: Dictionary = ship.fleet_stats
 	var nav: Dictionary = ship.navigation
 	var current: Vector2 = ship.velocity
-	var speed_limit := top_speed * float(stats.speed)
-	var accel := acceleration * float(stats.acceleration)
-	var turn := turn_speed * float(stats.maneuver)
+	var speed_limit: float = stats.normal_speed
+	var accel: float = stats.travel_acceleration
+	var turn: float = stats.turn_rate
 	if not ship.can_fly or speed_limit <= 0.0:
 		ship.navigation = {"mode": "idle"}
 		ship.velocity = Vector2.ZERO

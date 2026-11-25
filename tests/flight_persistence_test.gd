@@ -27,7 +27,8 @@ func _run() -> void:
 		{"name": "Pilot", "parts": MODULES.default_design(), "position": Vector2.ZERO, "heading": 0.0,
 			"hull": 73.0, "shield": 20.0, "shield_delay": 2.0},
 		{"name": "Wing", "parts": MODULES.default_design(), "position": Vector2(3000, 1000), "heading": 1.0,
-			"hull": 57.0, "shield": 15.0, "shield_delay": 1.0},
+			"hull": 57.0, "shield": 15.0, "shield_delay": 1.0,
+			"admin": {"cargo": 18, "module_slots": [{"type": "miner"}]}},
 	]}
 	var game := FLIGHT.instantiate()
 	root.add_child(game)
@@ -99,6 +100,7 @@ func _run() -> void:
 	assert(restored.ship_position == game.ship_position and restored.velocity == game.velocity)
 	assert(restored.fleet[1].galaxy_position == wing.galaxy_position and restored.fleet[1].hull == 57.0)
 	assert(restored.fleet[1].navigation == wing.navigation and restored.fleet[1].velocity == wing.velocity)
+	assert(restored._ship_capabilities(1).mining_rate == 4.0 and restored._ship_capabilities(1).available_cargo_space == 18)
 	assert(restored.elapsed == game.elapsed and restored.play_time == game.play_time)
 	assert(restored.iron == 4 and restored.tritium == 3)
 	assert(restored.player_shield == game.player_shield and restored.player_shield_delay == game.player_shield_delay)
