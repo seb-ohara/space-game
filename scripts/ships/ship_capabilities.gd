@@ -5,36 +5,39 @@ const MODULES := preload("res://scripts/ship_modules.gd")
 const LOADOUT := preload("res://scripts/ship_loadout.gd")
 const SLOT_WEAPONS := ["laser", "machine_gun", "missile", "railgun", "miner"]
 
-static func build(parts: Array, admin: Dictionary, base: Dictionary) -> Dictionary:
+static func build(parts: Array, admin: Dictionary, base: Dictionary, block_factors: Dictionary = {}) -> Dictionary:
 	# Normalize saved hardpoints or editor-mounted modules into the same firing slots.
 	var hull := parts.duplicate(true)
 	for part: Dictionary in hull:
 		part.erase("turret")
-	var result := MODULES.stats(hull)
+	var result := MODULES.stats(hull, block_factors)
 	var speed_unit: float = base.speed_unit
-	result.boost = float(base.boost) * float(result.speed)
+	var hyperdrive_factor: float = result.long_range_speed_factor
+	result.boost = float(base.boost) * hyperdrive_factor
 	for stat in ["health", "shield", "cargo"]:
 		if admin.has(stat):
 			result[stat] = maxf(0.0, float(admin[stat]))
 	if admin.has("speed"):
 		result.speed = maxf(0.0, float(admin.speed)) * speed_unit / float(base.speed)
+		# Keep the existing default for saved designs with an explicit speed override.
+		hyperdrive_factor = result.speed
 	if admin.has("acceleration"):
 		result.acceleration = maxf(0.0, float(admin.acceleration)) * speed_unit / float(base.acceleration)
 	if admin.has("turn"):
 		result.maneuver = deg_to_rad(maxf(0.0, float(admin.turn))) / float(base.turn)
 	if admin.has("boost"):
 		result.boost = maxf(0.0, float(admin.boost)) * speed_unit
-	result.hyperdrive = maxf(0.0, float(admin.get("hyperdrive", float(base.hyperdrive) * float(result.speed) / speed_unit))) * speed_unit
+	result.hyperdrive = maxf(0.0, float(admin.get("hyperdrive", float(base.hyperdrive) * hyperdrive_factor / speed_unit))) * speed_unit
 	var mounts: Array = LOADOUT.slots(admin) if admin.has("module_slots") or parts.is_empty() or not parts[0].get("fine_grid", false) else _editor_mounts(parts)
 	for slot: Dictionary in mounts:
 		match slot.type:
-			"shield": result.shield += 100.0
+			"shield": result.shield += 100.0 * float(block_factors.get("shield", {}).get("shield", 1.0))
 			"shield_recharge": result.shield_recharge += 2.0
 			_:
 				if slot.type in SLOT_WEAPONS:
-					var equipment: Dictionary = MODULES.TYPES[slot.type]
-					result.mining += float(equipment.get("mining", 0.0))
-					result.weapon += float(equipment.get("weapon", 0.0))
+					result.mining += MODULES.block_stat(slot.type, "mining", block_factors)
+					var weapon_type: String = slot.get("visual_type", slot.type)
+					result.weapon += MODULES.block_stat(weapon_type, "weapon", block_factors)
 	result.slots = mounts
 	result.has_command_deck = MODULES.has_command_deck(parts)
 	result.normal_speed = float(result.speed) * float(base.speed)
@@ -51,17 +54,21 @@ static func _editor_mounts(parts: Array) -> Array:
 	for part: Dictionary in parts:
 		if part.type not in MODULES.TURRET_BASE_TYPES:
 			continue
-		var kind: String = part.get("turret", "")
-		if kind in ["retro_machine_gun", "long_machine_gun"]:
-			kind = "machine_gun"
+		var visual_type: String = part.get("turret", "")
+		var kind := "machine_gun" if visual_type in ["retro_machine_gun", "long_machine_gun"] else visual_type
 		if kind not in SLOT_WEAPONS:
 			continue
 		var fraction := (MODULES.mount_position(part) - bounds.position) / bounds.size
-		mounts.append({"type": kind, "x": fraction.x, "y": fraction.y})
-	return LOADOUT.slots({"module_slots": mounts})
+		var mount := {"type": kind, "x": clampf(fraction.x, 0.0, 1.0), "y": clampf(fraction.y, 0.0, 1.0)}
+		if visual_type != kind:
+			mount.visual_type = visual_type
+		mounts.append(mount)
+		if mounts.size() == LOADOUT.MAX_SLOTS:
+			break
+	return mounts
 
 static func available_space(profile: Dictionary, cargo: Dictionary) -> int:
-	return maxi(0, int(profile.cargo_capacity) - int(cargo.get("iron", 0)) - int(cargo.get("tritium", 0)))
+	return maxi(0, int(profile.cargo_capacity) - int(cargo.get("iron", 0)) - int(cargo.get("tritium", 0)) - int(cargo.get("contracts", 0)))
 
 static func can_perform(profile: Dictionary, task: String, cargo: Dictionary = {}) -> bool:
 	var mobile: bool = profile.has_command_deck and profile.normal_speed > 0.0 and profile.travel_acceleration > 0.0

@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Space Game — Engine exhaust preview</title>
+<style>
+  :root { color-scheme: dark light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 var(--font-sans, system-ui, sans-serif); color: var(--foreground, light-dark(#22242a, #ecedf0)); }
+  main { max-width: 1040px; margin-inline: auto; padding-block: 12px; }
+  header, .controls, .test, footer { margin-inline: 12px; }
+  .eyebrow, .type, output, .caption { font: 600 10px/1.4 var(--font-mono, ui-monospace, monospace); letter-spacing: .12em; text-transform: uppercase; }
+  .muted, .eyebrow, .caption { color: var(--muted-foreground, light-dark(#535b69, #a8aebb)); }
+  h1 { font-size: 25px; line-height: 1.18; letter-spacing: -.035em; margin: 5px 0 6px; }
+  header p { margin: 0; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 16px 12px; }
+  .throttle { display: flex; flex: 1 1 224px; align-items: center; gap: 9px; padding-inline: 11px; min-height: 36px; border: 1px solid var(--border, light-dark(#d6dbe2, #3b414b)); border-radius: 7px; }
+  .throttle label { font-size: 12px; font-weight: 600; }
+  input { width: 72px; min-width: 40px; flex: 1; accent-color: var(--foreground, light-dark(#263447, #d8e9ff)); }
+  output { text-align: right; letter-spacing: 0; min-width: 4ch; font-variant-numeric: tabular-nums; }
+  button { min-height: 36px; white-space: nowrap; border: 1px solid var(--border, light-dark(#d6dbe2, #3b414b)); background: transparent; color: inherit; border-radius: 7px; padding: 0 11px; font: 600 12px var(--font-sans, system-ui, sans-serif); cursor: pointer; }
+  button:hover, button[aria-pressed="true"] { background: var(--secondary, light-dark(#e9edf3, #282d37)); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--ring, #5d9beb); outline-offset: 3px; }
+  .status { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; border: 1px solid currentColor; vertical-align: 1px; }
+  button[aria-pressed="true"] .status { background: currentColor; }
+  .test { display: grid; grid-template-columns: minmax(0, 1.95fr) minmax(0, 1fr); align-items: center; gap: 16px; padding-block: 10px; border-bottom: 1px solid var(--border, light-dark(#d6dbe2, #3b414b)); }
+  .test:last-of-type { border-bottom: 0; }
+  .stage { width: 100%; aspect-ratio: 480 / 146; overflow: hidden; display: block; border-radius: 8px; background: #080c14; }
+  .stage canvas { display: block; width: 100%; height: 100%; }
+  .type { display: flex; align-items: center; gap: 6px; color: var(--muted-foreground, light-dark(#535b69, #a8aebb)); }
+  .type::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--drive-color); }
+  h2 { font-size: 17px; line-height: 1.2; letter-spacing: -.018em; margin: 3px 0 5px; }
+  .description p { margin: 0; font-size: 12px; line-height: 1.42; }
+  footer { margin-top: 7px; }
+  @media (max-width: 570px) {
+    .test { grid-template-columns: minmax(0, 1fr); gap: 8px; padding-block: 9px 12px; }
+    .description { grid-row: 1; }
+    h2 { font-size: 16px; }
+  }
+  @media (max-width: 435px) { .throttle { flex-basis: 100%; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Space Game / Flight effects</div>
+    <h1>Engine exhaust preview</h1>
+    <p class="muted">Three exhaust styles on the same fighter, at the same throttle.</p>
+  </header>
+  <div class="controls" aria-label="Shared engine controls">
+    <div class="throttle">
+      <label for="throttle">Throttle</label>
+      <input id="throttle" type="range" min="0" max="100" value="82">
+      <output id="readout" for="throttle" aria-live="off">82%</output>
+    </div>
+    <button type="button" id="cycle" aria-pressed="false"><span class="status" aria-hidden="true"></span>Cycle thrust</button>
+    <button type="button" id="play">Pause motion</button>
+  </div>
+  <section class="test" style="--drive-color:#f29b51" aria-labelledby="chemical-title">
+    <div class="stage"><canvas width="960" height="292" role="img" aria-label="Top-down fighter with two turbulent amber rocket exhaust plumes"></canvas></div>
+    <div class="description">
+      <div class="type">01 / Chemical</div>
+      <h2 id="chemical-title">Combustion rocket</h2>
+      <p class="muted">White-hot at the nozzle. The exhaust fans out and breaks into ragged, cooling wisps.</p>
+    </div>
+  </section>
+  <section class="test" style="--drive-color:#49c4f5" aria-labelledby="plasma-title">
+    <div class="stage"><canvas width="960" height="292" role="img" aria-label="Top-down fighter with two bright blue, tightly focused plasma jets"></canvas></div>
+    <div class="description">
+      <div class="type">02 / Plasma</div>
+      <h2 id="plasma-title">Magnetic plasma drive</h2>
+      <p class="muted">A tight blue jet with bright filaments that travel down the core before fading.</p>
+    </div>
+  </section>
+  <section class="test" style="--drive-color:#aa9af7" aria-labelledby="ion-title">
+    <div class="stage"><canvas width="960" height="292" role="img" aria-label="Top-down fighter with two narrow, steady violet ion beams"></canvas></div>
+    <div class="description">
+      <div class="type">03 / Electric</div>
+      <h2 id="ion-title">Ion drive</h2>
+      <p class="muted">A faint violet beam that builds slowly and stays nearly steady once it’s on.</p>
+    </div>
+  </section>
+  <footer class="caption">Close-up view · Visual concepts, not a physics simulation</footer>
+  <noscript><p>Enable JavaScript to run the animations.</p></noscript>
+</main>
+<script>
+(() => {
+  'use strict';
+  const W = 480, H = 146;
+  const ship = { x: 74, y: 16, w: 169, h: 113 };
+  // Nozzle positions from the Small Fighter preset, before its 90° rotation.
+  const ports = [397, 161].map(x => ({
+    x: ship.x + ship.w * 783 / 833,
+    y: ship.y + ship.h * (556 - x) / 557
+  }));
+  const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
+  const mix = (a, b, t) => a + (b - a) * t;
+  const smooth = (a, b, x) => {
+    const t = clamp((x - a) / (b - a));
+    return t * t * (3 - 2 * t);
+  };
+  const hash = (x, y) => {
+    let n = Math.imul(x + 71, 374761393) ^ Math.imul(y + 319, 668265263);
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+  };
+  function noise(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    const fx = x - ix, fy = y - iy;
+    const a = fx * fx * (3 - 2 * fx), b = fy * fy * (3 - 2 * fy);
+    return mix(mix(hash(ix, iy), hash(ix + 1, iy), a), mix(hash(ix, iy + 1), hash(ix + 1, iy + 1), a), b);
+  }
+  const styles = [
+    { rgb: [255, 131, 56], rise: .22, fall: .13, flow: 165, base: 34, reach: 103 },
+    { rgb: [65, 174, 255], rise: .45, fall: .30, flow: 265, base: 31, reach: 137 },
+    { rgb: [131, 113, 255], rise: 1.04, fall: .77, flow: 370, base: 37, reach: 144 }
+  ];
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  const throttle = document.querySelector('#throttle');
+  const readout = document.querySelector('#readout');
+  const cycle = document.querySelector('#cycle');
+  const play = document.querySelector('#play');
+  const engines = [...document.querySelectorAll('.stage canvas')].map((canvas, i) => ({
+    ctx: canvas.getContext('2d'), config: styles[i], power: .82,
+    history: [{ at: -1.3, power: .82 }, { at: 0, power: .82 }]
+  }));
+  const buffer = (w, h) => Object.assign(document.createElement('canvas'), {width: w, height: h});
+  const hull = buffer(Math.round(ship.w * 2), Math.round(ship.h * 2));
+  const hullCtx = hull.getContext('2d');
+  const lit = buffer(hull.width, hull.height);
+  const litCtx = lit.getContext('2d');
+  const backdrop = buffer(W * 2, H * 2);
+  const bg = backdrop.getContext('2d');
+  const JET_W = 185, JET_H = 68, CENTER = JET_H / 2;
+  const jet = buffer(JET_W, JET_H);
+  const jc = jet.getContext('2d');
+  const frame = jc.createImageData(JET_W, JET_H);
+  let hullReady = false;
+  let paused = reduced.matches, cycling = false, cycleStart = 0;
+  let time = 0, last = 0, handle = 0;
+
+  bg.scale(2, 2);
+  const sky = bg.createLinearGradient(0, 0, W, H);
+  sky.addColorStop(0, '#111927');
+  sky.addColorStop(.57, '#080d17');
+  sky.addColorStop(1, '#070a12');
+  bg.fillStyle = sky;
+  bg.fillRect(0, 0, W, H);
+  for (let i = 0; i < 116; i++) {
+    const x = Math.floor(hash(i, 11) * W), y = Math.floor(hash(i, 17) * H);
+    const a = hash(i, 31);
+    bg.fillStyle = `rgba(187,205,237,${.05 + .36 * a * a * a})`;
+    bg.fillRect(x, y, a > .95 ? 1.35 : .65, a > .95 ? 1.35 : .65);
+  }
+  bg.strokeStyle = 'rgba(169,193,228,.22)';
+  bg.lineWidth = .65;
+  for (const [x, y, dx, dy] of [[13, 13, 1, 1], [W - 13, 13, -1, 1], [13, H - 13, 1, -1], [W - 13, H - 13, -1, -1]]) {
+    bg.beginPath(); bg.moveTo(x, y + 7 * dy); bg.lineTo(x, y); bg.lineTo(x + 7 * dx, y); bg.stroke();
+  }
+  bg.strokeStyle = 'rgba(169,193,228,.16)';
+  bg.beginPath();
+  for (let x = 222; x <= 434; x += 14) { bg.moveTo(x, H - 15); bg.lineTo(x, H - (x % 28 === 12 ? 10 : 12)); }
+  bg.stroke();
+
+  function glow(ctx, x, y, rx, ry, rgb, alpha) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(rx, ry);
+    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    gradient.addColorStop(0, `rgba(${rgb.join(',')},${clamp(alpha)})`);
+    gradient.addColorStop(.36, `rgba(${rgb.join(',')},${clamp(alpha * .38)})`);
+    gradient.addColorStop(1, `rgba(${rgb.join(',')},0)`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(-1, -1, 2, 2);
+    ctx.restore();
+  }
+
+  function drawJet(engine, kind, t, port, seed) {
+    const { ctx, config: { rgb, flow, base, reach }, history } = engine;
+    const pixels = frame.data;
+    pixels.fill(0);
+    const max = Math.min(JET_W, base + reach + 1);
+    let sample = history.length - 2;
+    // Each part of the plume carries the throttle it had when it left the bell.
+    for (let x = 0; x < max; x++) {
+      const emitted = time - x / flow;
+      while (sample > 0 && history[sample].at > emitted) sample--;
+      const a = history[sample], b = history[sample + 1];
+      const power = mix(a.power, b.power, clamp((emitted - a.at) / (b.at - a.at)));
+      const length = base + reach * power;
+      if (power < .006 || x >= length) continue;
+      const onset = smooth(.004, .24, power);
+      const radiance = onset * (.73 + .27 * power);
+      const u = x / length;
+      let width, shift = 0, edge = 0, adv = 0, warp = 0, band = 0, filament = 0, shaft = 0;
+      if (kind === 0) {
+        adv = x * .073 - t * 12;
+        warp = noise(adv * .75, seed);
+        shift = (warp - .5) * 16 * smooth(4, length, x);
+        width = (3.8 + x * .145) * (.76 + .28 * power) * mix(1, .72 + warp * .57, smooth(0, 32, x));
+        band = .88 + .12 * Math.cos(x * .57 - t * 3.5) * Math.exp(-x * .027);
+        edge = (1 - smooth(.2, 1, u)) * radiance;
+      } else if (kind === 1) {
+        adv = x * .17 - t * 15;
+        warp = noise(adv * .46, seed + 40);
+        shift = .9 * Math.sin(x * .15 - t * 15 + seed) * smooth(3, 42, x);
+        width = (2.5 + 2.8 * Math.exp(-x * .065) + 1.5 * smooth(38, length, x)) * (.70 + power * .35);
+        band = .79 + .21 * Math.cos(x * .40 + .36 * Math.sin(t * 2 + seed)) * Math.exp(-x * .004);
+        filament = Math.sin(x * .30 - t * 21 + seed) * width * .58;
+        edge = (1 - smooth(.28, 1, u)) * radiance;
+      } else {
+        shaft = .91 + .07 * Math.sin(x * .36 - t * 4.1 + seed) + .02 * Math.sin(t * 10 + seed);
+        width = 2.05 + x * .022;
+        edge = (1 - smooth(.17, 1, u)) * onset * (.45 + .55 * power);
+      }
+      for (let y = Math.max(0, Math.floor(CENTER + shift - width * 2.1)); y < Math.min(JET_H, CENTER + shift + width * 2.1); y++) {
+        const dy = y - CENTER - shift, r = dy / width;
+        const halo = Math.exp(-1.55 * r * r);
+        let alpha, hot, red, green, blue;
+        if (kind === 0) {
+          const flow = noise(adv, dy * .125 + seed + warp * .5);
+          const detail = noise(adv * 2.6 + 50, dy * .37 + seed * 2);
+          const churn = mix(1, clamp((flow * .72 + detail * .28 - .18) * 1.72), smooth(5, 53, x));
+          const core = Math.exp(-5 * r * r - x * .044) * band;
+          alpha = edge * (halo * (.20 + .60 * churn) * churn + .55 * core);
+          hot = clamp(core * .95 + churn * .43 * Math.exp(-x * .025));
+          red = 255 - 68 * smooth(0, 1, u) * (1 - hot);
+          green = mix(58 + 61 * churn, 249, hot);
+          blue = mix(26 + 20 * churn, 217, hot);
+        } else if (kind === 1) {
+          const travel = .48 + .52 * noise(adv, seed + 18);
+          const strand = Math.exp(-((dy - filament) ** 2) / 1.2) + .68 * Math.exp(-((dy + filament * .82) ** 2) / .90);
+          const core = Math.exp(-7 * r * r) * band;
+          alpha = edge * (.44 * halo + band * (.42 * core + .38 * travel * strand)) * (.70 + .30 * warp);
+          hot = clamp((core * .77 + strand * .33 * travel) * (1 - .45 * u));
+          red = mix(31, 216, hot);
+          green = mix(121, 252, hot);
+          blue = 255;
+        } else {
+          const core = Math.exp(-3.5 * dy * dy) * shaft;
+          const grid = Math.exp(-((Math.abs(dy) - (1.1 + x * .008)) ** 2) / .65) * Math.exp(-x * .045);
+          alpha = edge * (.15 * halo + .63 * core + .36 * grid + .29 * halo * Math.exp(-x * .16));
+          hot = clamp(core * (.43 + .45 * Math.exp(-x * .033)) + grid * .39);
+          red = mix(119, 213, hot);
+          green = mix(99, 207, hot);
+          blue = 255;
+        }
+        if (alpha <= .005) continue;
+        const i = (y * JET_W + x) * 4;
+        pixels[i] = red; pixels[i + 1] = green; pixels[i + 2] = blue; pixels[i + 3] = 255 * alpha;
+      }
+    }
+    jc.putImageData(frame, 0, 0);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const hotBell = smooth(.004, .24, engine.power) * (.73 + .27 * engine.power);
+    glow(ctx, port.x + 6, port.y, [31, 25, 15][kind], [13, 10, 7][kind], rgb, hotBell * .33);
+    ctx.drawImage(jet, port.x - .8, port.y - CENTER - .5);
+    if (kind === 0) {
+      for (let i = 0; i < 17; i++) {
+        const period = .48 + .55 * hash(i, seed);
+        const age = (t / period + hash(i, 44)) % 1;
+        const emitted = time - age * period;
+        let index = history.length - 2;
+        while (index > 0 && history[index].at > emitted) index--;
+        const a = history[index], b = history[index + 1];
+        const power = mix(a.power, b.power, clamp((emitted - a.at) / (b.at - a.at)));
+        const x = age * (base + reach * power) * (.57 + .52 * hash(i, seed + 1));
+        const drift = (hash(i, seed + 2) - .5) * x * .38;
+        const y = port.y + drift + .6 * Math.sin(t * 22 + i);
+        const brightness = smooth(.02, .42, power) * (1 - age) * (.16 + .34 * hash(i, seed + 3));
+        ctx.strokeStyle = `rgba(255,${Math.round(mix(228, 87, age))},${Math.round(mix(167, 37, age))},${brightness})`;
+        ctx.lineWidth = .5 + .36 * hash(i, seed + 4);
+        ctx.beginPath(); ctx.moveTo(port.x + x, y); ctx.lineTo(port.x + x + 1 + age * 3, y + drift * .025); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawHull(ctx, rgb, power, kind) {
+    if (!hullReady) return;
+    litCtx.setTransform(1, 0, 0, 1, 0, 0);
+    litCtx.clearRect(0, 0, lit.width, lit.height);
+    litCtx.save();
+    litCtx.scale(2, 2);
+    const output = smooth(0, .30, power) * (.50 + .50 * power);
+    for (const port of ports) {
+      const x = port.x - ship.x, y = port.y - ship.y;
+      glow(litCtx, x - 3, y, [44, 37, 24][kind], [27, 21, 17][kind], rgb, output * [.54, .60, .40][kind]);
+      glow(litCtx, x - 2, y, 12, 7, [255, 245, 230], output * [.30, .24, .14][kind]);
+    }
+    litCtx.restore();
+    litCtx.globalCompositeOperation = 'destination-in';
+    litCtx.drawImage(hull, 0, 0);
+    litCtx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(hull, ship.x, ship.y, ship.w, ship.h);
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.drawImage(lit, ship.x, ship.y, ship.w, ship.h);
+    ctx.restore();
+  }
+
+  function draw() {
+    engines.forEach((engine, kind) => {
+      const { ctx, power, config } = engine;
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
+      ctx.drawImage(backdrop, 0, 0, W, H);
+      ports.forEach((port, i) => drawJet(engine, kind, time + i * .16 + kind * .19, port, 17 + i * 23));
+      drawHull(ctx, config.rgb, power, kind);
+    });
+  }
+  function setThrottle(value) {
+    throttle.value = value;
+    readout.value = `${throttle.value}%`;
+  }
+  function update(dt) {
+    if (cycling) {
+      const phase = (time - cycleStart) % 8.4;
+      const thrust = phase < 3.3 ? 1 : phase < 5.1 ? .44 : phase < 6.8 ? 1 : 0;
+      setThrottle(thrust * 100);
+    }
+    const target = Number(throttle.value) / 100;
+    engines.forEach(engine => {
+      const tau = target > engine.power ? engine.config.rise : engine.config.fall;
+      engine.power = mix(engine.power, target, 1 - Math.exp(-dt / tau));
+      if (Math.abs(engine.power - target) < .001) engine.power = target;
+      engine.history.push({ at: time, power: engine.power });
+      while (engine.history[1].at < time - 1.2) engine.history.shift();
+    });
+  }
+  function tick(now) {
+    handle = 0;
+    if (paused) return;
+    if (!last || now - last >= 25) {
+      const dt = last ? Math.min((now - last) / 1000, .1) : 1 / 60;
+      last = now;
+      time += dt;
+      update(dt);
+      draw();
+    }
+    handle = requestAnimationFrame(tick);
+  }
+  function syncPlay() {
+    play.textContent = paused ? 'Play motion' : 'Pause motion';
+    if (paused) {
+      if (handle) cancelAnimationFrame(handle);
+      handle = 0;
+      last = 0;
+    } else if (!handle) handle = requestAnimationFrame(tick);
+  }
+  function setCycle(value) {
+    cycling = value;
+    cycleStart = time;
+    cycle.setAttribute('aria-pressed', String(cycling));
+    if (cycling && paused) { paused = false; syncPlay(); }
+  }
+  throttle.addEventListener('input', () => {
+    setCycle(false);
+    setThrottle(throttle.value);
+    if (paused) {
+      engines.forEach(engine => {
+        engine.power = Number(throttle.value) / 100;
+        engine.history = [{ at: time - 1.3, power: engine.power }, { at: time, power: engine.power }];
+      });
+      draw();
+    }
+  });
+  cycle.addEventListener('click', () => setCycle(!cycling));
+  play.addEventListener('click', () => { paused = !paused; syncPlay(); });
+  const art = new Image();
+  art.onload = () => {
+    hullCtx.translate(0, hull.height);
+    hullCtx.rotate(-Math.PI / 2);
+    hullCtx.drawImage(art, 0, 0, hull.height, hull.width);
+    hullReady = true;
+    draw();
+  };
+  art.src = './ship-sprites/starters/small-fighter.png';
+  draw();
+  syncPlay();
+})();
+</script>
+</body>
+</html>

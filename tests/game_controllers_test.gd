@@ -97,6 +97,49 @@ func _run() -> void:
 	Input.action_release("camera_pan_right")
 	assert(game._camera_center().x > camera_start.x and not game.camera_following)
 	assert(game.ship_position == ship_position and game.velocity == ship_velocity)
+	# Send trackpad gestures through the viewport, just like regular input.
+	game._set_camera_zoom(sqrt(game._minimum_camera_zoom() * game._maximum_camera_zoom()))
+	game.camera_following = true
+	camera_start = game._camera_center()
+	var swipe := InputEventPanGesture.new()
+	swipe.position = root.get_visible_rect().size * 0.5
+	var initial_zoom: float = game.camera_zoom_target
+	swipe.delta = Vector2(32, 0)
+	root.push_input(swipe, true)
+	assert(game.camera_zoom_target == initial_zoom, "A horizontal swipe should not zoom.")
+	swipe.delta.y = -32
+	root.push_input(swipe, true)
+	assert(is_equal_approx(game.camera_zoom_target, initial_zoom * game.CAMERA_ZOOM_STEP))
+	assert(game.camera_zoom_focus == swipe.position)
+	swipe.delta.y = 32
+	root.push_input(swipe, true)
+	assert(is_equal_approx(game.camera_zoom_target, initial_zoom))
+	assert(game.camera_following and game._camera_center() == camera_start)
+	assert(game.ship_position == ship_position and game.velocity == ship_velocity)
+	var pinch := InputEventMagnifyGesture.new()
+	pinch.position = swipe.position + Vector2(30, -40)
+	pinch.factor = 1.15
+	root.push_input(pinch, true)
+	assert(is_equal_approx(game.camera_zoom_target, initial_zoom * pinch.factor))
+	assert(game.camera_zoom_focus == pinch.position)
+	pinch.factor = 0.5
+	root.push_input(pinch, true)
+	assert(is_equal_approx(game.camera_zoom_target, maxf(game._minimum_camera_zoom(), initial_zoom * 1.15 * 0.5)))
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.position = pinch.position
+	initial_zoom = game.camera_zoom_target
+	root.push_input(wheel, true)
+	assert(is_equal_approx(game.camera_zoom_target, initial_zoom * game.CAMERA_ZOOM_STEP))
+	game._open_settings()
+	camera_start = game._camera_center()
+	initial_zoom = game.camera_zoom_target
+	root.push_input(swipe, true)
+	root.push_input(pinch, true)
+	assert(game._camera_center() == camera_start and game.camera_zoom_target == initial_zoom)
+	game._close_settings()
+	game.set_physics_process(false)
 	# A panned camera can cull the world renderers without hiding the ship's local orbits.
 	game.camera_zoom = 0.0005
 	var far_view := Rect2(Vector2.ONE * 100000000.0, Vector2.ONE * 1000.0)

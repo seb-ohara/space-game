@@ -62,6 +62,17 @@ var minimap_system_indices := PackedInt32Array()
 var minimap_orbiters := {}
 var dot_texture: ImageTexture
 var surface: NoiseTexture2D
+# Offsets keep the displayed phase continuous when rates are edited mid-flight.
+var planet_rate := 1.0
+var moon_rate := 1.0
+var planet_clock_offset := 0.0
+var moon_clock_offset := 0.0
+
+func set_orbit_rates(clock: float, planets: float, moons: float) -> void:
+	planet_clock_offset += clock * (planet_rate - planets)
+	moon_clock_offset += clock * (moon_rate - moons)
+	planet_rate = planets
+	moon_rate = moons
 
 func configure(data: Dictionary, formed_systems: Dictionary) -> void:
 	galaxy = data
@@ -412,8 +423,9 @@ func _update_position(orbiter: Orbiter, star_center: Vector2, clock: float) -> v
 	var parent := orbiter.parent
 	var parent_x := parent.center_x if parent != null else star_center.x
 	var parent_y := parent.center_y if parent != null else star_center.y
-	var speed_scale := MOON_ORBIT_SPEED_SCALE if parent != null else PLANET_ORBIT_SPEED_SCALE
-	var anomaly := GALAXY.eccentric_anomaly(float(definition.phase) + TAU * fposmod(clock * speed_scale, definition.period) / definition.period, orbiter.eccentricity)
+	var orbit_clock := (clock * moon_rate + moon_clock_offset) * MOON_ORBIT_SPEED_SCALE if parent != null \
+		else (clock * planet_rate + planet_clock_offset) * PLANET_ORBIT_SPEED_SCALE
+	var anomaly := GALAXY.eccentric_anomaly(float(definition.phase) + TAU * fposmod(orbit_clock, definition.period) / definition.period, orbiter.eccentricity)
 	if orbiter.track != null:
 		orbiter.track.position = Vector2(parent_x, parent_y) + orbiter.center_offset
 	var offset_x := cos(anomaly) * orbiter.axes.x

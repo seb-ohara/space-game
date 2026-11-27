@@ -2,6 +2,7 @@ extends RefCounted
 
 const MODULES := preload("res://scripts/ship_modules.gd")
 const TEXEL_SIZE := MODULES.CELL / 16.0
+const MAX_RELIEF_EDGE := 1024
 const DECK_HEIGHT := 80
 const ENGINE_HEIGHT := 50
 const ARMOUR_HEIGHT := 123
@@ -18,7 +19,8 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 		if MODULES.is_decoration(part) and part.type == "retro_antenna":
 			var location := MODULES.mount_position(part) - center
 			area = area.merge(Rect2(location - Vector2.ONE * MODULES.CELL * 0.5, Vector2.ONE * MODULES.CELL))
-	var size := Vector2i((area.size / TEXEL_SIZE).ceil())
+	var texel_size := maxf(TEXEL_SIZE, maxf(area.size.x, area.size.y) / MAX_RELIEF_EDGE)
+	var size := Vector2i((area.size / texel_size).ceil()).min(Vector2i.ONE * MAX_RELIEF_EDGE)
 	var heights := PackedByteArray()
 	heights.resize(size.x * size.y)
 	var sprite_heights := PackedByteArray()
@@ -37,7 +39,7 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 			var polygon := PackedVector2Array([top_left, top_left + Vector2(drawn_size.x, 0), top_left + drawn_size, top_left + Vector2(0, drawn_size.y)])
 			var sample_uv := Transform2D(Vector2.RIGHT / drawn_size, Vector2.DOWN / drawn_size, -top_left / drawn_size)
 			var mask: Image = texture.diffuse_texture.get_image() if texture is CanvasTexture else texture.get_image()
-			_stamp(sprite_heights, size, area.position, polygon, SPRITE_EDGE_HEIGHT, mask, sample_uv, true)
+			_stamp(sprite_heights, size, area.position, texel_size, polygon, SPRITE_EDGE_HEIGHT, mask, sample_uv, true)
 		elif MODULES.is_decoration(part):
 			if not masks.has(kind):
 				var texture: Texture2D = MODULES.DECORATION_TEXTURES[kind]
@@ -68,11 +70,13 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 			if kind == "retro_bridge":
 				var half := span * 0.5
 				polygons = [PackedVector2Array([texture_center + Vector2(-half.x, -half.y), texture_center + Vector2(half.x, -half.y), texture_center + Vector2(half.x, half.y), texture_center + Vector2(-half.x, half.y)])]
+			var height := COCKPIT_HEIGHT if kind in ["cockpit", "armour_panel", "radar_dish"] else DETAIL_HEIGHT
+			if kind in MODULES.SURFACE_DECORATIONS:
+				height = DECK_HEIGHT + 10 if kind == "rivet" else DECK_HEIGHT + 18
 			for polygon in polygons:
 				if kind == "cockpit":
-					_stamp(heights, size, area.position, polygon, DECK_HEIGHT)
-				var height := COCKPIT_HEIGHT if kind in ["cockpit", "armour_panel", "radar_dish"] else DETAIL_HEIGHT
-				_stamp(heights, size, area.position, polygon, height, masks[kind], sample_uv)
+					_stamp(heights, size, area.position, texel_size, polygon, DECK_HEIGHT)
+				_stamp(heights, size, area.position, texel_size, polygon, height, masks[kind], sample_uv)
 		elif MODULES.is_exterior_structure(part) or MODULES.is_armour_overlay(part):
 			var height := DECK_HEIGHT
 			if MODULES.is_armour_overlay(part):
@@ -82,12 +86,12 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 			elif kind in MODULES.MAIN_ENGINE_TYPES:
 				height = ENGINE_HEIGHT
 			for polygon in MODULES.structural_polygons(part, offset):
-				_stamp(heights, size, area.position, polygon, height)
+				_stamp(heights, size, area.position, texel_size, polygon, height)
 			if part.has("turret"):
 				var hub := PackedVector2Array()
 				for spoke in range(12):
 					hub.append(MODULES.mount_position(part) - center + Vector2.from_angle(TAU * float(spoke) / 12.0) * 11.0)
-				_stamp(heights, size, area.position, hub, DETAIL_HEIGHT)
+				_stamp(heights, size, area.position, texel_size, hub, DETAIL_HEIGHT)
 	if not sprite_heights.is_empty():
 		_raise_sprite_hull(heights, sprite_heights, size)
 	var softened := _bevel_heights(heights, size)
@@ -99,7 +103,7 @@ static func bake(material: ShaderMaterial, parts: Array, bounds: Rect2, part_sca
 	var image := Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, pixels)
 	material.set_shader_parameter("relief_map", ImageTexture.create_from_image(image))
 	material.set_shader_parameter("relief_origin", area.position * part_scale)
-	material.set_shader_parameter("relief_size", Vector2(size) * TEXEL_SIZE * part_scale)
+	material.set_shader_parameter("relief_size", Vector2(size) * texel_size * part_scale)
 	material.set_shader_parameter("hull_half_size", bounds.size * 0.5 * part_scale)
 
 static func _raise_sprite_hull(heights: PackedByteArray, silhouette: PackedByteArray, size: Vector2i) -> void:
@@ -135,13 +139,13 @@ static func _raise_sprite_hull(heights: PackedByteArray, silhouette: PackedByteA
 			var detail_rise := (silhouette[index] - SPRITE_EDGE_HEIGHT) * smoothstep(3.0, 10.0, depth)
 			heights[index] = maxi(heights[index], SPRITE_EDGE_HEIGHT + roundi(hull_rise + detail_rise))
 
-static func _stamp(heights: PackedByteArray, size: Vector2i, origin: Vector2, polygon: PackedVector2Array, height: int, mask: Image = null, sample_uv: Transform2D = Transform2D.IDENTITY, sprite_relief := false) -> void:
+static func _stamp(heights: PackedByteArray, size: Vector2i, origin: Vector2, texel_size: float, polygon: PackedVector2Array, height: int, mask: Image = null, sample_uv: Transform2D = Transform2D.IDENTITY, sprite_relief := false) -> void:
 	# Each material section is convex, so each scan line covers one span.
 	var points := PackedVector2Array()
 	var top := INF
 	var bottom := -INF
 	for vertex in polygon:
-		var point := (vertex - origin) / TEXEL_SIZE
+		var point := (vertex - origin) / texel_size
 		points.append(point)
 		top = minf(top, point.y)
 		bottom = maxf(bottom, point.y)
@@ -164,7 +168,7 @@ static func _stamp(heights: PackedByteArray, size: Vector2i, origin: Vector2, po
 				continue
 			var raised_height := height
 			if mask != null:
-				var local_position := origin + Vector2(float(x) + 0.5, scan_y) * TEXEL_SIZE
+				var local_position := origin + Vector2(float(x) + 0.5, scan_y) * texel_size
 				var uv := sample_uv * local_position
 				var pixel := Vector2i((uv * mask_size).clamp(Vector2.ZERO, mask_size - Vector2.ONE))
 				var texel := mask.get_pixelv(pixel)

@@ -91,9 +91,17 @@ const SYSTEM_TEXTURES := {
 const DECORATION_TEXTURES := {
 	"retro_bridge": preload("res://component-art/retro-kit/retro_bridge.png"),
 	"retro_antenna": preload("res://component-art/retro-kit/retro_antenna.png"),
-
+	"rivet": preload("res://component-art/rivet.svg"),
+	"vent": preload("res://component-art/vent.svg"),
 }
+const SURFACE_DECORATIONS := ["rivet", "vent"]
 const RETRO_WEDGE_ICON := preload("res://component-art/retro-kit/retro_wedge_icon.png")
+const WINDOW_TYPES := ["window", "window_wedge"]
+const WINDOW_GLASS := preload("res://component-art/window-glass.png")
+const WINDOW_ICONS := {
+	"window": preload("res://component-art/window-square-icon.png"),
+	"window_wedge": preload("res://component-art/window-angle-icon.png"),
+}
 const EDGE_DECORATIONS := []
 const ARMOUR_PANEL_SIZE := Vector2i(3, 4)
 const MINING_TURRET_TEXTURE := preload("res://component-art/mining-turret-sprite.png")
@@ -127,10 +135,13 @@ static var cruiser_turret_textures := {}
 const CELL := 36.0
 const HULL_SUBDIVISIONS := 4
 const FINE_CELL := CELL / HULL_SUBDIVISIONS
+const FINE_CELL_METERS := 0.5
 const FINE_OFFSET := (CELL - FINE_CELL) * 0.5
 const BASE_TURN_SPEED := 3.1
-const GRID_HALF_WIDTH := 21
+const GRID_HALF_WIDTH := 21 # Legacy coarse-grid coordinate range.
 const GRID_HALF_HEIGHT := 22
+const BLUEPRINT_MAX_METERS := 500
+const BLUEPRINT_CELLS := int(BLUEPRINT_MAX_METERS / FINE_CELL_METERS)
 const MAX_COMPONENTS := 400
 const COMMAND_DECK_WIDTH := 3
 const POWER_ADJACENCY_BONUS := {"reactor": 5.0, "shield": 2.0}
@@ -138,9 +149,12 @@ const SHIELD_STACK_FACTOR := 0.6
 const ARMOUR_MASS := 12.0
 const ARMOUR_HEALTH := 65.0
 const ARMOUR_LAYER := "armour"
+const CIRCLE_HULL := "hull_circle_blocks"
+const LEGACY_CIRCLE_HULL := "hull_circle"
 # Parts offered by the builder. Retired parts remain in TYPES for existing ships.
 const ORDER := [
-	"retro_plain", "retro_wedge",
+	"retro_plain", "retro_wedge", "window", "window_wedge",
+	"rivet", "vent",
 	"engine",
 	"turret_base", "laser", "machine_gun", "retro_machine_gun", "long_machine_gun", "missile", "railgun", "miner",
 	"command_deck", "command_station", "reactor", "shield", "retro_cargo",
@@ -157,7 +171,11 @@ const TYPES := {
 	"retro_machine_gun": {"name":"Heritage machine gun", "category":"WEAPONS & MINING", "mass":5.0, "health":12.0, "power":-5.0, "weapon":14.0, "turret_turn_speed":3.2},
 	"retro_nose": {"name":"Heritage nose", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
 	"retro_plain": {"name":"Hull", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
+	CIRCLE_HULL: {"name":"Circle hull", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
+	LEGACY_CIRCLE_HULL: {"name":"Smooth circle hull", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
 	"retro_wedge": {"name":"Right-angle hull", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
+	"window": {"name":"Window", "category":"HULL & STRUCTURE", "mass":6.0, "health":16.0},
+	"window_wedge": {"name":"Right-angle window", "category":"HULL & STRUCTURE", "mass":6.0, "health":16.0},
 	"retro_spine": {"name":"Heritage central hull", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
 	"retro_stern": {"name":"Heritage stern", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
 	"retro_wing_left": {"name":"Heritage left wing", "category":"HULL & STRUCTURE", "mass":8.0, "health":28.0},
@@ -168,11 +186,13 @@ const TYPES := {
 	"retro_cargo": {"name":"Heritage cargo module", "category":"SYSTEMS & CARGO", "mass":8.0, "health":16.0, "cargo":200.0},
 	"retro_engine": {"name":"Heritage engine nozzle", "category":"PROPULSION", "mass":10.0, "health":18.0, "power":-12.0, "thrust":75.0},
 	"retro_antenna": {"name":"Heritage antenna", "category":"DETAILS"},
+	"rivet": {"name":"Rivet", "category":"DECORATIONS"},
+	"vent": {"name":"Vent", "category":"DECORATIONS"},
 
 	"connector": {"name":"Connector", "category":"HULL & STRUCTURE", "mass":2.0, "health":8.0},
 	"turret_base": {"name":"Turret base", "category":"WEAPONS & MINING", "mass":4.0, "health":20.0},
-	"engine": {"name":"Main engine", "category":"PROPULSION", "mass":10.0, "health":18.0, "power":-12.0, "thrust":150.0},
-	"thruster": {"name":"Small thruster", "category":"PROPULSION", "mass":4.0, "health":10.0, "power":-5.0, "thrust":26.0, "turn":14.0},
+	"engine": {"name":"Main engine", "category":"PROPULSION", "mass":10.0, "health":18.0, "power":-12.0, "thrust":225.0},
+	"thruster": {"name":"Small thruster", "category":"PROPULSION", "mass":4.0, "health":10.0, "power":-5.0, "thrust":52.0, "turn":14.0},
 	"laser": {"name":"Laser cannon", "category":"WEAPONS & MINING", "mass":5.0, "health":12.0, "power":-7.0, "weapon":18.0, "turret_turn_speed":2.2},
 	"long_machine_gun": {"name":"Long machine gun", "category":"WEAPONS & MINING", "mass":5.0, "health":12.0, "power":-5.0, "weapon":14.0, "turret_turn_speed":3.2},
 	"machine_gun": {"name":"Machine gun", "category":"WEAPONS & MINING", "mass":5.0, "health":12.0, "power":-5.0, "weapon":14.0, "turret_turn_speed":3.2},
@@ -222,7 +242,9 @@ static func decoration_mount_error(part: Dictionary, support: Dictionary, slot_h
 	if part.type == "armour_panel":
 		return "" if supports_interior(support.get("type", "")) else "The armour panel needs flat hull beneath every slot."
 	if part.type not in EDGE_DECORATIONS:
-		return "" if supports_interior(support.get("type", "")) else "Place this detail on a flat hull or armour block."
+		var kind: String = support.get("type", "")
+		var supported := has_interior_floor(support, decoration_mount(part)) if kind == LEGACY_CIRCLE_HULL else supports_interior(kind)
+		return "" if supported else "Place this detail on a flat hull or armour block."
 	if slot_has_hull:
 		return "Side details need a free slot beside the hull."
 	var kind: String = support.get("type", "")
@@ -239,23 +261,39 @@ static func can_place_on_layer(kind: String, interior: bool) -> bool:
 		return kind in INTERIOR_ONLY_TYPES or kind in CARGO_HOLD_TYPES
 	return kind not in INTERIOR_ONLY_TYPES
 
+static func is_circle_hull(kind: String) -> bool:
+	return kind in [CIRCLE_HULL, LEGACY_CIRCLE_HULL]
+
 static func is_square_hull(kind: String) -> bool:
 	return not is_full_wedge(kind) and HULL_TEXTURES.has(kind)
 
 static func supports_interior(kind: String) -> bool:
-	return kind == "armor" or is_square_hull(kind)
+	return kind in ["armor", "window"] or is_circle_hull(kind) or is_square_hull(kind)
+
+static func has_interior_floor(part: Dictionary, cell: Vector2i) -> bool:
+	var kind: String = part.get("type", "")
+	if kind.is_empty() or not occupies(part, cell):
+		return false
+	if kind == LEGACY_CIRCLE_HULL:
+		return _circle_covers_cell(footprint(part), cell)
+	if kind != "window_wedge":
+		return supports_interior(kind)
+	var area := footprint(part)
+	var distance := _wedge_cell_distance(_wedge_corner(part), area, cell)
+	# A module can sit below the broad end of a window, but not across its diagonal.
+	return (distance.x + 1) * area.size.y + (distance.y + 1) * area.size.x <= area.get_area()
 
 static func is_armour(kind: String) -> bool:
 	return kind in ["armor", "armor_wedge"]
 
 static func is_full_wedge(kind: String) -> bool:
-	return kind in ["wedge", "armor_wedge", "retro_wedge"]
+	return kind in ["wedge", "armor_wedge", "retro_wedge", "window_wedge"]
 
 static func can_paint(kind: String) -> bool:
-	return HULL_TEXTURES.has(kind) or is_armour(kind) or kind in ["wedge_half", "triangle", "wing"]
+	return HULL_TEXTURES.has(kind) or is_armour(kind) or kind in ["wedge_half", "triangle", "wing", CIRCLE_HULL, LEGACY_CIRCLE_HULL]
 
 static func can_stretch(kind: String) -> bool:
-	return kind == "engine" or HULL_TEXTURES.has(kind) or is_armour(kind) or CARGO_TEXTURES.has(kind) or (DECORATION_TEXTURES.has(kind) and kind not in ["armour_panel", "retro_bridge", "retro_antenna"])
+	return kind in ["engine", CIRCLE_HULL, LEGACY_CIRCLE_HULL] or kind in WINDOW_TYPES or HULL_TEXTURES.has(kind) or is_armour(kind) or CARGO_TEXTURES.has(kind) or (DECORATION_TEXTURES.has(kind) and kind not in ["armour_panel", "retro_bridge", "retro_antenna"])
 
 static func cell_size_for(part: Dictionary) -> float:
 	return FINE_CELL if part.get("fine_grid", false) else CELL
@@ -268,9 +306,9 @@ static func mount_position(part: Dictionary) -> Vector2:
 	var position := part_position(part)
 	return position + Vector2.ONE * FINE_OFFSET if part.get("fine_grid", false) else position
 
-# Equipment spans whole original cells, but its anchor can be on any fine cell.
+# Equipment spans whole original cells; structural tools and surface details size to fine cells.
 static func size_step(kind: String) -> int:
-	return 1 if kind in ["retro_plain", "retro_wedge"] else HULL_SUBDIVISIONS
+	return 1 if kind in ["retro_plain", "retro_wedge"] or is_circle_hull(kind) or kind in WINDOW_TYPES or kind in SURFACE_DECORATIONS else HULL_SUBDIVISIONS
 
 static func _default_size(part: Dictionary) -> Vector2i:
 	var span := _coarse_default_size(part)
@@ -340,11 +378,51 @@ static func _wedge_has_material(part: Dictionary, area: Rect2i, cell: Vector2i) 
 	var near := _wedge_cell_distance(_wedge_corner(part), area, cell)
 	return near.x * area.size.y + near.y * area.size.x < area.get_area()
 
+static func can_fill_wedge_slot(kind: String) -> bool:
+	return kind in ["retro_wedge", "window_wedge"]
+
+static func _wedge_slot_boundary(part: Dictionary, cell: Vector2i) -> Vector3i:
+	# In slot-local coordinates (0–1), solid material satisfies ax + by < c.
+	var area := footprint(part)
+	var corner := _wedge_corner(part)
+	var near := _wedge_cell_distance(corner, area, cell)
+	var a := -corner.x * area.size.y
+	var b := -corner.y * area.size.x
+	var c := area.get_area() - near.x * area.size.y - near.y * area.size.x + mini(a, 0) + mini(b, 0)
+	return Vector3i(a, b, c)
+
+static func wedges_share_slot(first: Dictionary, second: Dictionary, cell: Vector2i) -> bool:
+	if not can_fill_wedge_slot(first.type) or not can_fill_wedge_slot(second.type):
+		return false
+	var a := _wedge_slot_boundary(first, cell)
+	var b := _wedge_slot_boundary(second, cell)
+	# The same diagonal with opposing normals creates an exact, gap-free join.
+	return a.x * b.x < 0 and a.y * b.x == b.y * a.x and a.z * b.x == b.z * a.x
+
+static func _circle_cell_offset(area: Rect2i, cell: Vector2i) -> Vector2:
+	return Vector2(cell - area.position) + (Vector2.ONE - Vector2(area.size)) * 0.5
+
+static func _circle_covers_cell(area: Rect2i, cell: Vector2i) -> bool:
+	var radius := area.size.x * 0.5
+	var far_corner := _circle_cell_offset(area, cell).abs() + Vector2.ONE * 0.5
+	return far_corner.length_squared() <= radius * radius
+
+static func _shape_has_block(part: Dictionary, area: Rect2i, cell: Vector2i) -> bool:
+	if part.type == CIRCLE_HULL:
+		# Include whole square cells whose centres lie within the circle.
+		var offset := 2 * (cell - area.position) + Vector2i.ONE - area.size
+		return offset.length_squared() <= area.size.x * area.size.x
+	if part.type == LEGACY_CIRCLE_HULL:
+		var radius := area.size.x * 0.5
+		var nearest := (_circle_cell_offset(area, cell).abs() - Vector2.ONE * 0.5).max(Vector2.ZERO)
+		return nearest.length_squared() < radius * radius
+	return not is_full_wedge(part.type) or _wedge_has_material(part, area, cell)
+
 static func _block_key(offset: Vector2i) -> String:
 	return "%d,%d" % [offset.x, offset.y]
 
 static func _has_block(part: Dictionary, area: Rect2i, cell: Vector2i, cutouts: Dictionary) -> bool:
-	return (cutouts.is_empty() or not cutouts.has(_block_key(cell - area.position))) and (not is_full_wedge(part.type) or _wedge_has_material(part, area, cell))
+	return (cutouts.is_empty() or not cutouts.has(_block_key(cell - area.position))) and _shape_has_block(part, area, cell)
 
 static func occupies(part: Dictionary, cell: Vector2i) -> bool:
 	var area := footprint(part)
@@ -407,13 +485,25 @@ static func _valid_cutouts(part: Dictionary) -> bool:
 			return false
 		var offset := Vector2i(int(axes[0]), int(axes[1]))
 		var cell := area.position + offset
-		if key != _block_key(offset) or not area.has_point(cell) or (is_full_wedge(part.type) and not _wedge_has_material(part, area, cell)):
+		if key != _block_key(offset) or not area.has_point(cell) or not _shape_has_block(part, area, cell):
 			return false
 	return true
 
 static func _edge_interval(part: Dictionary, cell: Vector2i, direction: Vector2i, exact: bool = false) -> Vector2:
 	var across := 0 if direction.x != 0 else 1
 	var along := 1 - across
+	if part.type == LEGACY_CIRCLE_HULL:
+		var area := footprint(part)
+		var offset := _circle_cell_offset(area, cell)
+		var radius := area.size.x * 0.5
+		var edge := offset[across] + direction[across] * 0.5
+		var span_squared := radius * radius - edge * edge
+		if span_squared < 0.0:
+			return Vector2.ZERO
+		# Allow attaching hull at a circle's four tangent points without filling its corners.
+		var half_span := maxf(0.001, sqrt(span_squared))
+		var middle := 0.5 - offset[along]
+		return Vector2(clampf(middle - half_span, 0.0, 1.0), clampf(middle + half_span, 0.0, 1.0))
 	if part.type == "wedge_half":
 		var corner := _wedge_corner(part)
 		if direction[across] != corner[across]:
@@ -437,16 +527,23 @@ static func touches_edge(part: Dictionary, cell: Vector2i, direction: Vector2i) 
 	var interval := _edge_interval(part, cell, direction)
 	return interval.y > interval.x
 
+const EXACT_EDGE_TYPES := ["wedge_half", "armor_wedge", "retro_wedge", "window_wedge", LEGACY_CIRCLE_HULL]
+
 static func shares_edge(part: Dictionary, neighbor: Dictionary, cell: Vector2i, direction: Vector2i) -> bool:
-	if part.type not in ["wedge_half", "armor_wedge", "retro_wedge"] and neighbor.type not in ["wedge_half", "armor_wedge", "retro_wedge"]:
-		return touches_edge(part, cell, direction) and touches_edge(neighbor, cell + direction, -direction)
+	var a: String = part.type
+	var b: String = neighbor.type
+	if a not in EXACT_EDGE_TYPES and b not in EXACT_EDGE_TYPES:
+		return (a != "wedge" or touches_edge(part, cell, direction)) and (b != "wedge" or touches_edge(neighbor, cell + direction, -direction))
 	var first := _edge_interval(part, cell, direction, true)
 	var second := _edge_interval(neighbor, cell + direction, -direction, true)
 	return minf(first.y, second.y) > maxf(first.x, second.x)
 
 static func grid_bounds(fine_grid := false) -> Rect2i:
-	var step := HULL_SUBDIVISIONS if fine_grid else 1
-	return Rect2i(-GRID_HALF_WIDTH * step, -GRID_HALF_HEIGHT * step, (GRID_HALF_WIDTH * 2 + 1) * step, (GRID_HALF_HEIGHT * 2 + 1) * step)
+	if fine_grid:
+		# Preserve the original symmetry axis (between fine cells 1 and 2).
+		var start := HULL_SUBDIVISIONS / 2 - BLUEPRINT_CELLS / 2
+		return Rect2i(start, start, BLUEPRINT_CELLS, BLUEPRINT_CELLS)
+	return Rect2i(-GRID_HALF_WIDTH, -GRID_HALF_HEIGHT, GRID_HALF_WIDTH * 2 + 1, GRID_HALF_HEIGHT * 2 + 1)
 
 static func on_grid(area: Rect2i, fine_grid := false) -> bool:
 	return grid_bounds(fine_grid).encloses(area)
@@ -474,7 +571,7 @@ static func to_fine_grid(parts: Array) -> Array:
 					for y in range(step):
 						var offset := start + Vector2i(x, y)
 						var cell := footprint(part).position + offset
-						if not is_full_wedge(part.type) or _wedge_has_material(part, footprint(part), cell):
+						if _shape_has_block(part, footprint(part), cell):
 							mapped[_block_key(offset)] = part[field][key]
 			part[field] = mapped
 	return result
@@ -571,7 +668,7 @@ static func _valid_dimensions(part: Dictionary) -> bool:
 	if not is_finite(width) or not is_finite(height) or width < 1 or height < 1 or width != floorf(width) or height != floorf(height):
 		return false
 	var grid := grid_bounds(part.get("fine_grid", false))
-	if width > grid.size.x or height > grid.size.y:
+	if width > grid.size.x or height > grid.size.y or (is_circle_hull(part.type) and width != height):
 		return false
 	if part.get("fine_grid", false):
 		var step := size_step(part.type)
@@ -579,110 +676,30 @@ static func _valid_dimensions(part: Dictionary) -> bool:
 			return false
 	return can_stretch(part.type) or (width == expected.x and height == expected.y)
 
-static func _random_design_set(design: Array, cells: Dictionary, cell: Vector2i, kind: String, turret: String = "") -> void:
-	if not cells.has(cell):
-		return
-	var part: Dictionary = design[cells[cell]]
-	part.type = kind
-	part.rotation = 0
-	part.flip_x = cell.x > 0
-	part.erase("turret")
-	if turret != "":
-		part.turret = turret
-
 static func generate_random_design(rng: RandomNumberGenerator, combat: bool = false) -> Array:
-	# Three coherent silhouettes: narrow interceptor, broad freighter and long cruiser.
-	var profile := rng.randi_range(0, 2)
-	var half_length := rng.randi_range(5, 7) if profile == 0 else (rng.randi_range(5, 6) if profile == 1 else rng.randi_range(8, 10))
-	var max_width := rng.randi_range(3, 4) if profile == 0 else (rng.randi_range(4, 5) if profile == 1 else rng.randi_range(3, 4))
-	if combat:
-		half_length = 3 if profile == 2 else rng.randi_range(2, 3)
-		max_width = 2 if profile == 1 else rng.randi_range(1, 2)
-	var design: Array = []
-	var cells := {}
-	var hull_kind := "retro_spine" if combat else "retro_plain"
-	var engine_kind := "retro_engine" if combat else "engine"
-	for y in range(-half_length, half_length + 1):
-		var t := float(y + half_length) / float(half_length * 2)
-		var width := 0
-		if t > 0.0:
-			if profile == 0:
-				# A pointed nose, swept wings and a narrow engine section.
-				width = maxi(1, roundi(float(max_width) * (1.0 - absf(t - 0.57) / 0.57)))
-			elif profile == 1:
-				# Broad parallel cargo hull with tapered ends.
-				width = mini(max_width, 1 + mini(y + half_length, half_length - y))
-				width = maxi(1, width)
-			else:
-				# Long central hull, with fins across its middle.
-				width = 1 if t < 0.18 or t > 0.84 else (max_width if t > 0.38 and t < 0.64 else mini(2, max_width))
-		for x in range(-width, width + 1):
-			var cell := Vector2i(x, y)
-			cells[cell] = design.size()
-			var kind := hull_kind
-			if combat and x == 0 and y == -half_length:
-				kind = "retro_nose"
-			design.append({"type":kind, "x":x, "y":y, "rotation":0, "flip_x":x > 0})
-	# Engines sit at the aft edge, with unobstructed exhaust.
-	_random_design_set(design, cells, Vector2i(0, half_length), engine_kind)
-	if rng.randf() < 0.65:
-		for side in [-1, 1]:
-			_random_design_set(design, cells, Vector2i(side, half_length), engine_kind)
-	# Equipment is placed in balanced pairs, leaving the centreline as the spine.
-	var weapon_choices := ["laser", "machine_gun", "missile"]
-	var weapon: String = weapon_choices[rng.randi_range(0, weapon_choices.size() - 1)]
-	var weapon_y := -int(half_length / 2)
-	for side in [-1, 1]:
-		_random_design_set(design, cells, Vector2i(side, weapon_y), "turret_base", weapon)
-		if not combat:
-			_random_design_set(design, cells, Vector2i(side, half_length - 2), "retro_cargo")
-	var fit_interior := func(cell: Vector2i, kind: String) -> void:
-		if combat:
-			_random_design_set(design, cells, cell, kind)
-		else:
-			design.append({"type":kind, "layer":"interior", "x":cell.x, "y":cell.y, "rotation":0})
-	fit_interior.call(Vector2i.ZERO, "shield")
-	if not combat and (profile == 1 or rng.randf() < 0.5):
-		for side in [-1, 1]:
-			_random_design_set(design, cells, Vector2i(side, 1), "turret_base", "miner")
-	var command_y := 1 if combat else -half_length + 2
-	if combat:
-		design.append({"type":"retro_bridge", "layer":"decoration", "x":0, "y":command_y, "rotation":0, "width":1})
-	# Add paired reactors inside the hull until the complete design is powered.
-	for y in range(-half_length + 2, half_length):
-		if stats(design).power >= 0.0:
-			break
-		if y == command_y:
-			continue
-		for side in [-1, 1]:
-			var cell := Vector2i(side, y)
-			if cells.has(cell) and design[cells[cell]].type == hull_kind:
-				fit_interior.call(cell, "reactor")
-	design = migrate_legacy(design)
-	if not combat:
-		_install_command_deck(design, {"type":"command_deck", "layer":"interior", "rotation":0}, [Vector2i(-1, command_y)])
-	if combat:
-		var hull_colours := ["884a49", "985847", "795060", "65546d"]
-		var hull_colour: String = hull_colours[rng.randi_range(0, hull_colours.size() - 1)]
-		for part in design:
-			if part.type == "retro_spine":
-				part.paint = "bf7960" if absi(part.x) == max_width else hull_colour
-	return design
+	# Load lazily: the class generator uses these same geometry rules.
+	return load("res://scripts/ship_randomizer.gd").generate(rng, 0 if combat else rng.randi_range(0, 2), combat).parts
 
-static func stats(parts: Array) -> Dictionary:
+static func block_stat(kind: String, key: String, factors: Dictionary) -> float:
+	var value := float(TYPES[kind].get(key, 0.0))
+	return value * float(factors[kind].get(key, 1.0)) if factors.has(kind) else value
+
+static func stats(parts: Array, block_factors: Dictionary = {}) -> Dictionary:
 	var result := {"mass":0.0, "health":0.0, "power":0.0, "thrust":0.0, "turn":0.0, "weapon":0.0, "cargo":0.0, "mining":0.0}
 	var power_modules := {}
 	var shield_count := 0
+	var untuned := {}
 	for part in parts:
 		if not TYPES.has(part.get("type", "")) or (is_decoration(part) and part.type != "retro_bridge"):
 			continue
 		var kind: String = part.type
 		var info: Dictionary = TYPES[kind]
+		var tuning: Dictionary = block_factors.get(kind, untuned)
 		var units := _material_units(part)
 		for key in result:
-			result[key] += float(info.get(key, 0.0)) * units
+			result[key] += float(info.get(key, 0.0)) * float(tuning.get(key, 1.0)) * units
 			if kind in TURRET_BASE_TYPES and part.get("turret", "") in TURRETS:
-				result[key] += float(TYPES[part.turret].get(key, 0.0))
+				result[key] += block_stat(part.turret, key, block_factors)
 		if kind == "shield":
 			shield_count += 1
 		if POWER_ADJACENCY_BONUS.has(kind):
@@ -699,16 +716,18 @@ static func stats(parts: Array) -> Dictionary:
 				result.power += bonus
 				break
 	result.power_bonus_by_cell = power_bonus_by_cell
-	var first_shield: float = TYPES.shield.shield
+	var first_shield := block_stat("shield", "shield", block_factors)
 	result.shield = roundf(first_shield * (1.0 - pow(SHIELD_STACK_FACTOR, shield_count)) / (1.0 - SHIELD_STACK_FACTOR))
 	result.shield_recharge = minf(10.0, 3.0 + maxf(0.0, result.power) * 0.4) if shield_count > 0 else 0.0
 	var thrust_to_mass := float(result.thrust) / maxf(result.mass, 1.0)
-	result.speed = minf(0.40 + thrust_to_mass * 0.55, 1.25) if result.thrust > 0 else 0.0
+	var has_main_engine := parts.any(func(part: Dictionary) -> bool: return part.type == "engine")
+	result.long_range_speed_factor = minf(0.40 + thrust_to_mass * 0.55, 1.25) if result.thrust > 0 else 0.0
+	result.speed = result.long_range_speed_factor
 	result.acceleration = clampf(thrust_to_mass * 0.75, 0.08, 1.2) if result.thrust > 0 else 0.0
-	if parts.any(func(part: Dictionary) -> bool: return part.type == "engine"):
-		# Diminishing returns near the flight limits, rather than a hard cap that
-		# makes additional engines on a light hull have no effect.
-		result.speed = 0.40 + 0.85 * (1.0 - exp(-1.05 * thrust_to_mass))
+	if has_main_engine:
+		# Normal flight rewards high thrust-to-mass without retuning boost or hyperdrive.
+		result.long_range_speed_factor = 0.40 + 1.05 * (1.0 - exp(-1.05 * thrust_to_mass))
+		result.speed = 0.40 + 6.0 * (1.0 - exp(-0.50 * thrust_to_mass))
 		result.acceleration = maxf(0.08, 1.2 * (1.0 - exp(-1.25 * thrust_to_mass)))
 	# Normalize against a three-cell ship of mass 100. Offsets soften the
 	# advantage of tiny builds, and the base rate keeps large ships steerable.
@@ -716,7 +735,9 @@ static func stats(parts: Array) -> Dictionary:
 	var mass_factor := (float(result.mass) + 35.0) / 135.0
 	var length_factor := (length_in_cells + 2.0) / 5.0
 	var steering_bonus := minf(float(result.turn) * 0.003, 0.15)
-	result.maneuver = minf(0.12 + (0.45 + steering_bonus) / sqrt(mass_factor * length_factor), 1.1)
+	# Engine-assisted turning rewards thrust-to-mass while longer hulls still turn more slowly.
+	var engine_assist := 0.60 * (1.0 - exp(-0.65 * thrust_to_mass)) if has_main_engine else 0.0
+	result.maneuver = minf(0.12 + ((0.45 + steering_bonus) / sqrt(mass_factor) + engine_assist) / sqrt(length_factor), 1.1)
 	return result
 
 static func bounds(parts: Array) -> Rect2:
@@ -748,28 +769,32 @@ static func bounds(parts: Array) -> Rect2:
 static func dimensions_meters(parts: Array) -> Vector2:
 	return bounds(parts).size / WORLD_UNITS_PER_METER
 
+## Blueprint dimensions use the builder grid, independent of flight world scaling.
+static func design_dimensions_meters(parts: Array) -> Vector2:
+	if parts.is_empty():
+		return Vector2.ZERO
+	return bounds(parts).size * (FINE_CELL_METERS / FINE_CELL)
+
 static func length_scale(base_length: float, admin: Dictionary) -> float:
 	var length: Variant = admin.get("length_meters")
 	if (length is float or length is int) and is_finite(float(length)) and float(length) >= MIN_SHIP_LENGTH_METERS and float(length) <= MAX_SHIP_LENGTH_METERS:
 		return float(length) / base_length
 	return 1.0
 
-static func clearance_issues(parts: Array) -> Array[Dictionary]:
-	var cells := {}
+static func clearance_issues(parts: Array, exterior: Variant = null) -> Array[Dictionary]:
+	var engines := parts.filter(func(part: Dictionary) -> bool: return ENGINE_NOZZLE_OFFSETS.has(part.type))
 	var issues: Array[Dictionary] = []
-	for part in parts:
-		if is_exterior_structure(part):
-			for cell in occupied_cells(part):
-				cells[cell] = part
+	if engines.is_empty():
+		return issues
+	var cells: Dictionary = {} if exterior == null else exterior
+	if exterior == null:
+		for part in parts:
+			if is_exterior_structure(part):
+				for cell in occupied_cells(part):
+					cells[cell] = part
 	var directions := [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
-	for part in parts:
-		var is_weapon := false
-		var is_engine: bool = ENGINE_NOZZLE_OFFSETS.has(part.type)
-		if not is_weapon and not is_engine:
-			continue
-		var direction: Vector2i = directions[int(part.rotation) % 4]
-		if is_engine:
-			direction = -direction
+	for part: Dictionary in engines:
+		var direction: Vector2i = -directions[int(part.rotation) % 4]
 		for cell in occupied_cells(part):
 			var cursor: Vector2i = cell + direction
 			if occupies(part, cursor):
@@ -777,15 +802,16 @@ static func clearance_issues(parts: Array) -> Array[Dictionary]:
 			var grid := grid_bounds(part.get("fine_grid", false))
 			while grid.has_point(cursor):
 				if cells.has(cursor):
-					issues.append({"part": part, "blocked_at": cursor, "direction": direction, "side": "behind" if is_engine else "in front"})
+					issues.append({"part": part, "blocked_at": cursor, "direction": direction, "side": "behind"})
 					break
 				cursor += direction
 	return issues
 
-static func validate(parts: Array, require_flight: bool = true, check_clearance: bool = true) -> String:
+static func validate(parts: Array, require_flight: bool = true, check_clearance: bool = true, require_connected: bool = true) -> String:
 	if parts.size() == 0 or parts.size() > MAX_COMPONENTS:
 		return "A ship needs 1–%d connected components." % MAX_COMPONENTS
 	var exterior := {}
+	var shared_exterior := {}
 	var interior := {}
 	var decorations := {}
 	var armour := {}
@@ -856,6 +882,9 @@ static func validate(parts: Array, require_flight: bool = true, check_clearance:
 			return "A component needs at least one block."
 		for cell in blocks:
 			if cells.has(cell):
+				if is_exterior_structure(part) and not shared_exterior.has(cell) and wedges_share_slot(cells[cell], part, cell):
+					shared_exterior[cell] = part
+					continue
 				return "Armour panels cannot overlap." if is_armour_overlay(part) else "Components cannot overlap."
 			cells[cell] = part
 		if part.type == "cockpit":
@@ -868,7 +897,7 @@ static func validate(parts: Array, require_flight: bool = true, check_clearance:
 		if not _armour_has_support(panel, exterior):
 			return "Armour needs hull underneath its entire shape."
 	for cell in interior:
-		if not supports_interior(exterior.get(cell, {}).get("type", "")):
+		if not has_interior_floor(exterior.get(cell, {}), cell):
 			return "The command deck needs three adjacent hull cells." if interior[cell].type in ["command_deck", "retro_bridge"] else "Interior equipment needs a hull cell beneath every slot."
 	for cell in decorations:
 		var detail: Dictionary = decorations[cell].duplicate()
@@ -879,23 +908,12 @@ static func validate(parts: Array, require_flight: bool = true, check_clearance:
 			return error
 	if exterior.is_empty():
 		return "Place a hull block first."
-	var visited := {}
-	var todo: Array[Vector2i] = [exterior.keys()[0]]
-	while not todo.is_empty():
-		var cell: Vector2i = todo.pop_back()
-		if visited.has(cell):
-			continue
-		visited[cell] = true
-		for direction in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
-			var neighbor: Vector2i = cell + direction
-			if exterior.has(neighbor) and not visited.has(neighbor) and shares_edge(exterior[cell], exterior[neighbor], cell, direction):
-				todo.append(neighbor)
-	if visited.size() != exterior.size():
+	if (require_flight or require_connected) and not _exterior_is_connected(exterior, shared_exterior):
 		return "Every component must connect to the ship."
 	if require_flight and command_deck_count == 0:
 		return "Install a command station or command deck in the Interior view to fly."
 	if check_clearance:
-		var issues := clearance_issues(parts)
+		var issues := clearance_issues(parts, exterior)
 		if not issues.is_empty():
 			var issue: Dictionary = issues[0]
 			return "%s needs a clear path %s it." % [TYPES[issue.part.type].name, issue.side]
@@ -907,6 +925,30 @@ static func validate(parts: Array, require_flight: bool = true, check_clearance:
 	if totals.thrust <= 0.0:
 		return "Add an engine to fly."
 	return ""
+
+static func _exterior_is_connected(exterior: Dictionary, shared_exterior: Dictionary) -> bool:
+	var visited := {}
+	var todo: Array[Vector2i] = [exterior.keys()[0]]
+	visited[todo[0]] = true
+	while not todo.is_empty():
+		var cell: Vector2i = todo.pop_back()
+		for direction in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+			var neighbor: Vector2i = cell + direction
+			if not exterior.has(neighbor) or visited.has(neighbor):
+				continue
+			# Two wedges sharing a slot meet along its diagonal and are connected.
+			# Treat that slot as a unit, using either wedge when checking its edges.
+			var connected: bool
+			if shared_exterior.has(cell):
+				connected = shared_exterior.has(neighbor) or touches_edge(exterior[neighbor], neighbor, -direction)
+			elif shared_exterior.has(neighbor):
+				connected = touches_edge(exterior[cell], cell, direction)
+			else:
+				connected = shares_edge(exterior[cell], exterior[neighbor], cell, direction)
+			if connected:
+				visited[neighbor] = true
+				todo.append(neighbor)
+	return visited.size() == exterior.size()
 
 static func get_engine_texture() -> Texture2D:
 	if engine_texture == null:
@@ -966,6 +1008,13 @@ static func hull_polygon(part: Dictionary, center: Vector2, cell_size: float = 0
 		cell_size = cell_size_for(part)
 	var size := Vector2(footprint(part).size)
 	var top_left := center - Vector2.ONE * cell_size * 0.5
+	if part.type == LEGACY_CIRCLE_HULL:
+		var radius := size.x * cell_size * 0.5
+		var midpoint := top_left + Vector2.ONE * radius
+		var outline := PackedVector2Array()
+		for i in range(48):
+			outline.append(midpoint + Vector2.from_angle(TAU * i / 48.0) * radius)
+		return outline
 	if is_full_wedge(part.type) or part.type == "wedge_half":
 		var corner := (Vector2(_wedge_corner(part)) + Vector2.ONE) * 0.5
 		var reach := Vector2.ONE
@@ -985,10 +1034,12 @@ static func _rect_polygon(rect: Rect2) -> PackedVector2Array:
 		rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y),
 	])
 
-static func _solid_rects(part: Dictionary) -> Array[Rect2i]:
+static func _solid_rects(part: Dictionary, exclude_painted := false) -> Array[Rect2i]:
 	var area := footprint(part)
 	var cutouts: Dictionary = part.get("cutouts", {})
-	if cutouts.is_empty():
+	var paints: Dictionary = part.get("cell_paints", {}) if exclude_painted else {}
+	var block_circle: bool = part.type == CIRCLE_HULL
+	if cutouts.is_empty() and paints.is_empty() and not block_circle:
 		return [area]
 	var rects: Array[Rect2i] = []
 	var previous := {}
@@ -997,8 +1048,11 @@ static func _solid_rects(part: Dictionary) -> Array[Rect2i]:
 		var current := {}
 		var start := 0
 		for x in range(area.size.x + 1):
-			if x < area.size.x and not cutouts.has(_block_key(Vector2i(x, y))):
-				continue
+			if x < area.size.x:
+				var offset := Vector2i(x, y)
+				var key := _block_key(offset) if not cutouts.is_empty() or not paints.is_empty() else ""
+				if not cutouts.has(key) and not paints.has(key) and (not block_circle or _shape_has_block(part, area, area.position + offset)):
+					continue
 			if x > start:
 				var run := Vector2i(start, x - start)
 				var index: int = previous.get(run, rects.size())
@@ -1010,6 +1064,53 @@ static func _solid_rects(part: Dictionary) -> Array[Rect2i]:
 			start = x + 1
 		previous = current
 	return rects
+
+const MERGEABLE_HULL_TYPES := ["retro_plain", CIRCLE_HULL]
+
+## Merge adjacent full cells for collision and ray tests without filling holes.
+static func merged_square_hull(parts: Array, center: Vector2, scale_factor: float) -> Array[PackedVector2Array]:
+	var shapes: Array[PackedVector2Array] = []
+	var rows := {}
+	var cell_size := CELL
+	for part: Dictionary in parts:
+		if part.type not in MERGEABLE_HULL_TYPES or not is_exterior_structure(part):
+			continue
+		cell_size = cell_size_for(part) # A validated layout has one grid scale.
+		for rect in _solid_rects(part):
+			for y in range(rect.position.y, rect.end.y):
+				if not rows.has(y):
+					rows[y] = []
+				rows[y].append(Vector2i(rect.position.x, rect.end.x))
+	var rectangles: Array[Rect2i] = []
+	var previous := {}
+	var last_y := 0
+	var ys := rows.keys()
+	ys.sort()
+	for y: int in ys:
+		if y != last_y + 1:
+			previous.clear()
+		var row: Array = rows[y]
+		row.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x < b.x)
+		var current := {}
+		var span: Vector2i = row[0]
+		for i in range(1, row.size() + 1):
+			if i < row.size() and row[i].x <= span.y:
+				span.y = maxi(span.y, row[i].y)
+				continue
+			var index: int = previous.get(span, rectangles.size())
+			if index == rectangles.size():
+				rectangles.append(Rect2i(span.x, y, span.y - span.x, 1))
+			else:
+				rectangles[index].size.y += 1
+			current[span] = index
+			if i < row.size():
+				span = row[i]
+		previous = current
+		last_y = y
+	var origin := -Vector2.ONE * CELL * 0.5 - center
+	for rect in rectangles:
+		shapes.append(_rect_polygon(Rect2((origin + Vector2(rect.position) * cell_size) * scale_factor, Vector2(rect.size) * cell_size * scale_factor)))
+	return shapes
 
 static func preset_alpha_polygons(part: Dictionary, center: Vector2, scale_factor: float = 1.0) -> Array[PackedVector2Array]:
 	var texture := preset_texture(part)
@@ -1045,14 +1146,14 @@ static func material_polygons(part: Dictionary, center: Vector2, cell_size: floa
 			points.append(top_left + point * span)
 		return [points]
 	var outline := hull_polygon(part, center, cell_size)
-	if not part.has("cutouts"):
+	if not part.has("cutouts") and part.type != CIRCLE_HULL:
 		return [outline]
 	var origin := Vector2(footprint(part).position) + Vector2.ONE * 0.5
 	var sections: Array[PackedVector2Array] = []
 	for run in _solid_rects(part):
 		var rect := Rect2(center + (Vector2(run.position) - origin) * cell_size, Vector2(run.size) * cell_size)
 		var polygon := _rect_polygon(rect)
-		if is_full_wedge(part.type):
+		if is_full_wedge(part.type) or part.type == LEGACY_CIRCLE_HULL:
 			sections.append_array(Geometry2D.intersect_polygons(outline, polygon))
 		else:
 			sections.append(polygon)
@@ -1078,7 +1179,7 @@ static func _armour_has_support(panel: Dictionary, exterior: Dictionary) -> bool
 	for cell in occupied_cells(panel):
 		var support: Dictionary = exterior.get(cell, {})
 		var kind: String = support.get("type", "")
-		if supports_interior(kind):
+		if supports_interior(kind) and (kind != LEGACY_CIRCLE_HULL or has_interior_floor(support, cell)):
 			continue
 		if not is_full_wedge(kind) and kind != "wedge_half":
 			return false
@@ -1193,18 +1294,20 @@ static func _material_units(part: Dictionary) -> float:
 	var area := footprint(part).get_area()
 	var factor := pow(cell_size_for(part) / CELL, 2.0)
 	var cutouts: Dictionary = part.get("cutouts", {})
-	if cutouts.is_empty() and part.type != "retro_wedge":
+	if part.type == CIRCLE_HULL:
+		return occupied_cells(part).size() * factor
+	if cutouts.is_empty() and part.type not in ["retro_wedge", "window_wedge", LEGACY_CIRCLE_HULL]:
 		return float(area) * factor
-	if not is_full_wedge(part.type):
+	if not is_full_wedge(part.type) and part.type != LEGACY_CIRCLE_HULL:
 		return float(area - cutouts.size()) * factor
-	# One unit of wedge stats represents a half-cell of material.
+	# Round hull and windows use their actual area; wedge hull units use half a cell.
 	var twice_area := 0.0
 	for polygon in material_polygons(part, Vector2.ZERO, 1.0):
 		var cross_sum := 0.0
 		for i in range(polygon.size()):
 			cross_sum += polygon[i].cross(polygon[(i + 1) % polygon.size()])
 		twice_area += absf(cross_sum)
-	return twice_area * factor
+	return twice_area * factor * (0.5 if part.type in ["window_wedge", LEGACY_CIRCLE_HULL] else 1.0)
 
 static func _texture_clips(part: Dictionary, pose: Transform2D) -> Array[Rect2]:
 	if not part.has("cutouts"):
@@ -1375,17 +1478,102 @@ static func _structural_outline(part: Dictionary, center: Vector2, half: float) 
 		points.append(center + (local_point * half).rotated(angle))
 	return points
 
-static func _draw_neutral_hull(canvas: CanvasItem, part: Dictionary, center: Vector2, cell_size: float, tint: Color) -> void:
+const TILED_HULL_TYPES := ["retro_plain", "retro_wedge", CIRCLE_HULL, LEGACY_CIRCLE_HULL]
+
+# Whole panels share a repeating tile UV grid, including across cutouts and paint.
+static func _hull_tile_surfaces(part: Dictionary, center: Vector2, cell_size: float) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var kind: String = part.type
+	var shaped := kind == "retro_wedge" or kind == LEGACY_CIRCLE_HULL
+	var outline := hull_polygon(part, center, cell_size) if shaped else PackedVector2Array()
 	var origin := footprint(part).position
+	var tile_origin := center - Vector2.ONE * cell_size * 0.5
+	var rotation := Transform2D(-int(part.rotation) * PI / 2.0, Vector2.ZERO) if kind != "retro_wedge" else Transform2D.IDENTITY
+	var flip: bool = kind != "retro_wedge" and part.get("flip_x", false)
+	var paint: String = part.get("paint", "")
+	var color := Color(0.70, 0.70, 0.70) if paint.is_empty() else Color(paint)
+	var paints: Dictionary = part.get("cell_paints", {})
+	if shaped and not part.has("cutouts") and paints.is_empty():
+		_append_tile_surface(result, outline, tile_origin, rotation, flip, cell_size, color)
+		return result
+	for run in _solid_rects(part, true):
+		var tile_rect := Rect2(tile_origin + Vector2(run.position - origin) * cell_size, Vector2(run.size) * cell_size)
+		_append_tile_rect(result, tile_rect, outline, tile_origin, rotation, flip, cell_size, color)
+	for key: String in paints:
+		var axes := key.split(",")
+		var offset := Vector2(int(axes[0]), int(axes[1]))
+		_append_tile_rect(result, Rect2(tile_origin + offset * cell_size, Vector2.ONE * cell_size), outline, tile_origin, rotation, flip, cell_size, Color(paints[key]))
+	return result
+
+static func _append_tile_rect(result: Array[Dictionary], rect: Rect2, outline: PackedVector2Array, origin: Vector2, rotation: Transform2D, flip: bool, cell_size: float, color: Color) -> void:
+	var polygon := _rect_polygon(rect)
+	if outline.is_empty():
+		_append_tile_surface(result, polygon, origin, rotation, flip, cell_size, color)
+	else:
+		for section in Geometry2D.intersect_polygons(outline, polygon):
+			_append_tile_surface(result, section, origin, rotation, flip, cell_size, color)
+
+static func _append_tile_surface(result: Array[Dictionary], polygon: PackedVector2Array, origin: Vector2, rotation: Transform2D, flip: bool, cell_size: float, color: Color) -> void:
+	var uv := PackedVector2Array()
+	for vertex in polygon:
+		var coord := rotation * ((vertex - origin) / cell_size - Vector2.ONE * 0.5)
+		if flip:
+			coord.x = -coord.x
+		uv.append(coord + Vector2.ONE * 0.5)
+	result.append({"vertices":polygon, "uv":uv, "color":color})
+
+static func tiled_hull_mesh(parts: Array, center: Vector2, scale_factor: float = 1.0) -> ArrayMesh:
+	var vertices := PackedVector2Array()
+	var uvs := PackedVector2Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	for part: Dictionary in parts:
+		if part.type not in TILED_HULL_TYPES or not is_exterior_structure(part):
+			continue
+		for surface in _hull_tile_surfaces(part, (part_position(part) - center) * scale_factor, cell_size_for(part) * scale_factor):
+			var first := vertices.size()
+			vertices.append_array(surface.vertices)
+			uvs.append_array(surface.uv)
+			var count: int = surface.vertices.size()
+			for i in range(count):
+				colors.append(surface.color)
+			# Each piece is a convex hull clipped against a rectangular run.
+			for i in range(1, count - 1):
+				indices.append(first)
+				indices.append(first + i)
+				indices.append(first + i + 1)
+	if indices.is_empty():
+		return null
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+static func draw_builder_part(canvas: CanvasItem, part: Dictionary, center: Vector2, scale_factor: float, clip: Rect2, alpha: float = 1.0, glass: Dictionary = {}) -> void:
+	var cell_size := cell_size_for(part) * scale_factor
+	var rect := Rect2(center - Vector2.ONE * cell_size * 0.5, Vector2(footprint(part).size) * cell_size)
+	if is_exterior_structure(part) and part.type not in MAIN_ENGINE_TYPES and not rect.grow(cell_size).intersects(clip):
+		return
+	draw_part(canvas, part, center, scale_factor, alpha, Color.WHITE, 1.0, false, glass)
+
+static func _draw_neutral_hull(canvas: CanvasItem, part: Dictionary, center: Vector2, cell_size: float, tint: Color) -> void:
+	var area := footprint(part)
+	var origin := area.position
 	var angled: bool = part.type == "retro_wedge"
-	var outline := hull_polygon(part, center, cell_size) if angled else PackedVector2Array()
+	var round_hull: bool = part.type == LEGACY_CIRCLE_HULL
+	var outline := hull_polygon(part, center, cell_size) if angled or round_hull else PackedVector2Array()
 	var rotation := Transform2D(-int(part.get("rotation", 0)) * PI / 2.0, Vector2.ZERO)
 	var texture: Texture2D = HULL_TEXTURES.retro_plain
 	for cell in occupied_cells(part):
 		var tile_origin := center + (Vector2(cell - origin) - Vector2.ONE * 0.5) * cell_size
 		var tile := _rect_polygon(Rect2(tile_origin, Vector2.ONE * cell_size))
 		var sections: Array[PackedVector2Array] = []
-		if angled:
+		if angled or (round_hull and not _circle_covers_cell(area, cell)):
 			sections = Geometry2D.intersect_polygons(outline, tile)
 		else:
 			sections.append(tile)
@@ -1408,7 +1596,114 @@ static func _draw_neutral_hull(canvas: CanvasItem, part: Dictionary, center: Vec
 				uv.append(coord)
 			canvas.draw_polygon(section, PackedColorArray([color]), uv, texture)
 
-static func draw_part(canvas: CanvasItem, part: Dictionary, center: Vector2, scale_factor: float = 1.0, alpha: float = 1.0, tint: Color = Color.WHITE, navigation_light_level: float = 1.0, separate_turrets: bool = false) -> void:
+static func _window_rim_key(pane: Dictionary) -> Vector4i:
+	var origin := footprint(pane).position
+	var corner := _wedge_corner(pane) if pane.type == "window_wedge" else Vector2i.ZERO
+	return Vector4i(origin.x, origin.y, corner.x, corner.y)
+
+static func window_render_context(parts: Array) -> Dictionary:
+	var panes := parts.filter(func(part: Dictionary) -> bool: return part.type in WINDOW_TYPES)
+	if panes.is_empty():
+		return {}
+	var lines := {}
+	var reflection_area := Rect2(part_position(panes[0]), Vector2.ZERO)
+	var first_point := true
+	for pane: Dictionary in panes:
+		var owner := _window_rim_key(pane)
+		for polygon in material_polygons(pane, part_position(pane)):
+			for i in range(polygon.size()):
+				var a := polygon[i]
+				var b := polygon[(i + 1) % polygon.size()]
+				reflection_area = Rect2(a, Vector2.ZERO) if first_point else reflection_area.expand(a)
+				first_point = false
+				if a.is_equal_approx(b):
+					continue
+				var axis := (b - a).normalized()
+				if axis.x < 0.0 or (is_zero_approx(axis.x) and axis.y < 0.0):
+					axis = -axis
+					var swap := a
+					a = b
+					b = swap
+				var line := Vector3i(roundi(axis.x * 100000.0), roundi(axis.y * 100000.0), roundi(axis.orthogonal().dot(a) * 1000.0))
+				if not lines.has(line):
+					lines[line] = []
+				lines[line].append({"owner":owner, "a":a, "b":b, "axis":axis})
+	# Sweep collinear spans. A stretch covered by two panes is a join, even if
+	# only part of a window side meets its neighbour (or a cutout splits it).
+	var rims := {}
+	for edges: Array in lines.values():
+		var axis: Vector2 = edges[0].axis
+		var events: Array[Vector3i] = []
+		for i in range(edges.size()):
+			events.append(Vector3i(roundi(axis.dot(edges[i].a) * 1000.0), i, 1))
+			events.append(Vector3i(roundi(axis.dot(edges[i].b) * 1000.0), i, 0))
+		events.sort_custom(func(a: Vector3i, b: Vector3i) -> bool: return a.x < b.x)
+		var active := {}
+		var previous := events[0].x
+		for event in events:
+			if event.x > previous and active.size() == 1:
+				var edge: Dictionary = edges[active.keys()[0]]
+				var anchor: Vector2 = edge.a
+				var offset := axis.dot(anchor)
+				var owner: Vector4i = edge.owner
+				if not rims.has(owner):
+					rims[owner] = PackedVector2Array()
+				var points: PackedVector2Array = rims[owner]
+				points.append(anchor + axis * (previous / 1000.0 - offset))
+				points.append(anchor + axis * (event.x / 1000.0 - offset))
+				rims[owner] = points
+			if event.z == 1:
+				active[event.y] = true
+			else:
+				active.erase(event.y)
+			previous = event.x
+	return {"area":reflection_area, "rims":rims, "interior":parts.filter(is_interior)}
+
+static func _draw_window(canvas: CanvasItem, part: Dictionary, center: Vector2, cell_size: float, tint: Color, context: Dictionary) -> void:
+	if context.is_empty():
+		context = window_render_context([part])
+	var world_origin := part_position(part)
+	var scale_factor := cell_size / cell_size_for(part)
+	var reflection_area: Rect2 = context.area
+	var reflection_size := reflection_area.size.max(Vector2.ONE)
+	var interior: Array = context.interior
+	var area := footprint(part)
+	var glass := Rect2(center - Vector2.ONE * cell_size * 0.5, Vector2(area.size) * cell_size)
+	var deck_colour := Color("142a36") * tint
+	var frame_colour := Color("78b8cf") * tint
+	for polygon in material_polygons(part, center, cell_size):
+		canvas.draw_colored_polygon(polygon, deck_colour)
+		for module: Dictionary in interior:
+			var module_area := footprint(module)
+			if not area.intersects(module_area):
+				continue
+			var texture: Texture2D = SYSTEM_TEXTURES.get(module.type, CARGO_TEXTURES.get(module.type))
+			if texture == null:
+				continue
+			var rect := Rect2(glass.position + Vector2(module_area.position - area.position) * cell_size, Vector2(module_area.size) * cell_size)
+			for patch in Geometry2D.intersect_polygons(polygon, _rect_polygon(rect)):
+				var uv := PackedVector2Array()
+				for vertex in patch:
+					var coord := (vertex - rect.position) / rect.size
+					if int(module.rotation) == 2:
+						coord = Vector2.ONE - coord
+					if module.get("flip_x", false):
+						coord.x = 1.0 - coord.x
+					uv.append(coord)
+				canvas.draw_polygon(patch, PackedColorArray([Color(0.55, 0.77, 0.88, 0.9) * tint]), uv, texture)
+		var reflections := PackedVector2Array()
+		for vertex in polygon:
+			var world_point := world_origin + (vertex - center) / scale_factor
+			reflections.append((world_point - reflection_area.position) / reflection_size)
+		canvas.draw_polygon(polygon, PackedColorArray([tint]), reflections, WINDOW_GLASS)
+	var rim: PackedVector2Array = context.rims.get(_window_rim_key(part), PackedVector2Array())
+	if not rim.is_empty():
+		var projected := PackedVector2Array()
+		for point in rim:
+			projected.append(center + (point - world_origin) * scale_factor)
+		canvas.draw_multiline(projected, frame_colour, maxf(0.35, cell_size * 0.075), true)
+
+static func draw_part(canvas: CanvasItem, part: Dictionary, center: Vector2, scale_factor: float = 1.0, alpha: float = 1.0, tint: Color = Color.WHITE, navigation_light_level: float = 1.0, separate_turrets: bool = false, window_context: Dictionary = {}) -> void:
 	var kind: String = part.type
 	if PRESET_TEXTURES.has(kind):
 		var texture: Texture2D = preset_texture(part)
@@ -1417,8 +1712,16 @@ static func draw_part(canvas: CanvasItem, part: Dictionary, center: Vector2, sca
 		canvas.draw_texture_rect(texture, preset_draw_rect(part, center, scale_factor), false, Color(tint.r, tint.g, tint.b, alpha * tint.a))
 		return
 	var cell_size := cell_size_for(part) * scale_factor
-	if kind in ["retro_plain", "retro_wedge"]:
-		_draw_neutral_hull(canvas, part, center, cell_size, Color(tint.r, tint.g, tint.b, alpha * tint.a))
+	if kind in WINDOW_TYPES:
+		_draw_window(canvas, part, center, cell_size, Color(tint.r, tint.g, tint.b, alpha * tint.a), window_context)
+		return
+	if kind in TILED_HULL_TYPES:
+		var color := Color(tint.r, tint.g, tint.b, alpha * tint.a)
+		if canvas.texture_repeat == CanvasItem.TEXTURE_REPEAT_ENABLED:
+			for surface in _hull_tile_surfaces(part, center, cell_size):
+				canvas.draw_polygon(surface.vertices, PackedColorArray([surface.color * color]), surface.uv, HULL_TEXTURES.retro_plain)
+		else:
+			_draw_neutral_hull(canvas, part, center, cell_size, color)
 		return
 	if part.has("paint") and can_paint(kind):
 		var paint := Color(str(part.paint))

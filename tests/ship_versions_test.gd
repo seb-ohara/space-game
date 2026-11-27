@@ -76,14 +76,16 @@ func _run() -> void:
 	restored._open_fleet()
 	assert(restored.fleet_design_entries.is_empty(), "Legacy presets must not be offered to spawn")
 	restored._open_hangar()
+	assert(not restored.world_background.visible, "Do not render flight behind the opaque editor")
 	assert(restored.hangar_layer.get_child(0).builder.parts.is_empty())
 	assert(restored.fleet[0].parts == parts)
 	restored._close_hangar()
+	assert(restored.world_background.visible)
 	assert(restored._set_default_ship_version(0, ""))
 	assert(SAVES.read(slot).ship_versions[MODULES.CARGO_SHIP].default.is_empty())
 	restored.free()
 
-	var editor_slot := _check_editor_start(map, parts)
+	var editor_slot: String = await _check_editor_start(map, parts)
 	await process_frame
 	assert(DirAccess.remove_absolute(LIBRARY.PATH) == OK)
 	assert(SAVES.delete(slot))
@@ -110,24 +112,68 @@ func _check_editor_start(map: Dictionary, legacy_parts: Array) -> String:
 		{"type": "command_deck", "layer": "interior", "x": 0, "y": 0, "width": 3, "rotation": 0},
 		{"type": "reactor", "layer": "interior", "x": 1, "y": 1, "rotation": 0},
 		{"type": "engine", "x": 0, "y": 3, "rotation": 0},
+		{"type": "turret_base", "turret": "long_machine_gun", "x": 3, "y": 1, "rotation": 0},
 	])
 	builder.parts = hull
-	assert(MODULES.stats(hull).thrust == 150.0)
+	var engine_thrust: float = MODULES.TYPES.engine.thrust
+	assert(MODULES.stats(hull).thrust == engine_thrust)
 	var one: Dictionary = builder._flight_performance()
 	hull.append({"type": "engine", "fine_grid": true, "x": 8, "y": 12, "rotation": 0})
 	var two: Dictionary = builder._flight_performance()
 	for key in ["acceleration", "speed", "boost", "hyperdrive"]:
 		assert(two[key] > one[key], key)
-	assert(MODULES.validate(hull) == "" and MODULES.stats(hull).thrust == 300.0)
-	assert(LIBRARY.write({"Legacy preset": legacy_parts, "My Design": hull}))
+	assert(MODULES.validate(hull) == "" and MODULES.stats(hull).thrust == 2.0 * engine_thrust)
+	assert(LIBRARY.write({"Legacy preset": legacy_parts}))
+	builder._open_save_dialog()
+	await process_frame
+	assert(builder.design_dialog.size.y <= 180)
+	assert(builder.design_dialog.get_ok_button().get_global_rect().end.y <= builder.design_dialog.size.y)
+	assert(builder.design_dialog.get_cancel_button().get_global_rect().end.y <= builder.design_dialog.size.y)
+	assert(builder.design_dialog.visible and builder.design_summary.text.contains("Flight-ready"))
+	assert(builder.design_summary.text.contains("8.0 m long × 8.0 m wide"), builder.design_summary.text)
+	assert(builder.design_dialog.get_ok_button().disabled)
+	builder.design_name.text = "My Design"
+	builder.design_name.text_changed.emit("My Design")
+	assert(not builder.design_dialog.get_ok_button().disabled)
+	builder.design_dialog.confirmed.emit()
+	assert(not builder.design_dialog.visible)
 	editor._show_library()
 	assert(editor.library_list.item_count == 1 and editor.library_list.get_item_text(0) == "My Design")
-	editor._resume_editing()
+	assert(editor.preview_name.text == "My Design" and editor.preview_readiness.text == "Flight-ready")
+	assert(editor.preview_dimensions.text.contains("8.0 m long × 8.0 m wide"))
+	editor._open_selected()
+	builder = editor.builder
+	var original: Array = LIBRARY.read()["My Design"]
+	builder.parts[0].paint = "dd8866"
+	builder._open_save_dialog()
+	assert(builder.design_name.text == "My Design")
+	assert(builder.design_dialog.get_ok_button().text == "Overwrite…")
+	builder.design_dialog.confirmed.emit()
+	assert(builder.design_dialog.visible and LIBRARY.read()["My Design"] == original)
+	assert(builder.design_dialog.get_ok_button().text == "Confirm overwrite")
+	await process_frame
+	assert(builder.design_dialog.size.y <= 180, "Overwrite dialog size: %s, message size: %s" % [builder.design_dialog.size, builder.design_message.size])
+	assert(builder.design_dialog.get_ok_button().get_global_rect().end.y <= builder.design_dialog.size.y)
+	builder.design_dialog.hide()
+	builder._open_save_dialog()
+	assert(builder.design_dialog.get_ok_button().text == "Overwrite…")
+	builder.design_dialog.confirmed.emit()
+	assert(LIBRARY.read()["My Design"] == original)
+	builder.design_dialog.confirmed.emit()
+	assert(not builder.design_dialog.visible and builder.saved_parts == builder.parts)
+	assert(LIBRARY.read()["My Design"][0].paint == "dd8866")
+	assert(LIBRARY.read().has("Legacy preset"))
+	hull = builder.parts
 	builder._deploy()
 	assert(game.game_started and game.fleet.size() == 1 and game.custom_parts == hull)
 	var flight: Dictionary = game._ship_capabilities(0)
+	assert(game.cached_turret_mounts.size() == 1)
+	assert(game.cached_turret_mounts[0].turret == "machine_gun" and game.cached_turret_mounts[0].visual_type == "long_machine_gun")
+	assert(game.cached_turret_mounts[0].local_position.is_equal_approx(MODULES.mount_position(hull[4]) - MODULES.bounds(hull).get_center()))
+	assert(not game.player_visual.details.show_behind_parent)
 	assert(is_equal_approx(two.speed * game.DISPLAY_KM_SPEED_UNIT, flight.normal_speed))
 	assert(is_equal_approx(two.acceleration * game.DISPLAY_KM_SPEED_UNIT, flight.travel_acceleration))
+	assert(two.turn > 0.0 and is_equal_approx(two.turn, rad_to_deg(flight.turn_rate)))
 	assert(is_equal_approx(two.boost * game.DISPLAY_KM_SPEED_UNIT, flight.boost))
 	assert(is_equal_approx(two.hyperdrive * game.DISPLAY_KM_SPEED_UNIT, flight.hyperdrive))
 	assert(SAVES.read(game.save_slot).fleet[0].parts == hull)

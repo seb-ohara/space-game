@@ -41,11 +41,29 @@ func _run() -> void:
 	hangar._resume_editing()
 	assert(builder.parts == prior_design and builder.is_visible_in_tree())
 	assert(builder._grid_viewport().size.x > 100)
+	var swipe := InputEventPanGesture.new()
+	swipe.position = builder._grid_viewport().get_center() + Vector2(80, -40)
+	var zoom_before := builder.grid_zoom
+	var anchor := (swipe.position - builder._grid_center()) / builder._grid_spacing()
+	swipe.delta = Vector2(32, 0)
+	root.push_input(swipe, true)
+	assert(builder.grid_zoom == zoom_before, "A horizontal two-finger drag should not zoom.")
+	swipe.delta = Vector2(0, -32)
+	root.push_input(swipe, true)
+	assert(is_equal_approx(builder.grid_zoom, zoom_before * builder.GRID_ZOOM_STEP))
+	assert(anchor.is_equal_approx((swipe.position - builder._grid_center()) / builder._grid_spacing()), "Trackpad zoom should stay anchored to the pointer.")
+	swipe.delta.y = 32
+	root.push_input(swipe, true)
+	assert(is_equal_approx(builder.grid_zoom, zoom_before))
+	swipe.position.x = 20
+	root.push_input(swipe, true)
+	assert(is_equal_approx(builder.grid_zoom, zoom_before), "Dragging outside the canvas must not zoom it.")
 	var hull_options := []
 	for kind in builder.palette_buttons:
 		if MODULES.TYPES[kind].category == "HULL & STRUCTURE":
 			hull_options.append(builder.palette_buttons[kind].text)
-	assert(hull_options == ["Hull", "Right-angle hull"])
+	assert(hull_options == ["Hull", "Right-angle hull", "Window", "Right-angle window"])
+	assert(builder._design_dimensions() == Vector2.ZERO)
 	for retired in ["retro_turret_base", "retro_engine", "retro_bridge", "retro_antenna"]:
 		assert(not builder.palette_buttons.has(retired))
 
@@ -54,6 +72,7 @@ func _run() -> void:
 	assert(builder.parts.size() == 1)
 	assert(builder.parts[0].type == "retro_plain")
 	assert(MODULES.footprint(builder.parts[0]).size == Vector2i.ONE)
+	assert(builder._design_dimensions().is_equal_approx(Vector2(0.5, 0.5)))
 	var hull_bounds := MODULES.bounds(builder.parts)
 	assert(hull_bounds.size == Vector2.ONE * MODULES.CELL / 4.0)
 	var first_hull: Dictionary = builder.parts[0]
@@ -176,11 +195,25 @@ func _run() -> void:
 		assert(MODULES.engine_vertices(old_engine, MODULES.part_position(old_engine)) == MODULES.engine_vertices(new_engine, MODULES.part_position(new_engine)))
 	var launches := []
 	hangar.launch_requested.connect(func(parts: Array): launches.append(parts))
+	builder._toggle_view()
+	builder.palette_buttons.retro_plain.pressed.emit()
+	_mouse(builder, Vector2i(0, -4), MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i(0, -4), MOUSE_BUTTON_LEFT, false)
+	assert(MODULES.footprint(builder.parts[-1]) == Rect2i(0, -4, 1, 1), builder.status)
+	var draft := LIBRARY.restore_design(JSON.parse_string(JSON.stringify(builder.parts)))
+	assert(draft.size() == builder.parts.size())
 	builder._deploy()
-	assert(launches.size() == 1 and launches[0] == builder.parts)
+	assert(launches.is_empty() and builder.status == "Every component must connect to the ship.")
+	_mouse(builder, Vector2i(0, -3), MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i(0, -1), MOUSE_BUTTON_LEFT, false)
+	builder.palette_buttons.rivet.pressed.emit()
+	_mouse(builder, Vector2i(0, -3), MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i(0, -3), MOUSE_BUTTON_LEFT, false)
+	assert(builder.parts[-1].type == "rivet")
+	builder._deploy()
+	assert(launches.size() == 1 and launches[0] == builder.parts, builder.status)
 
 	# The two stepped pads from the reported case can be fitted in symmetry mode.
-	builder._toggle_view()
 	builder.parts = [
 		{"type":"retro_plain", "fine_grid":true, "x":-4, "y":0, "width":12, "height":4, "rotation":0},
 		{"type":"retro_plain", "fine_grid":true, "x":-5, "y":4, "width":4, "height":3, "rotation":0},
@@ -195,6 +228,233 @@ func _run() -> void:
 	assert(builder.parts.size() == 5, builder.status)
 	assert(MODULES.footprint(builder.parts[3]) == Rect2i(-5, 7, 4, 4))
 	assert(MODULES.footprint(builder.parts[4]) == Rect2i(5, 7, 4, 4))
+
+	builder.symmetry_button.button_pressed = false
+	builder.parts = []
+	builder.part_rotation = 0
+	builder.part_flipped = false
+	builder.palette_buttons.window.pressed.emit()
+	_mouse(builder, Vector2i.ZERO, MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i(3, 3), MOUSE_BUTTON_LEFT, false)
+	builder.palette_buttons.window_wedge.pressed.emit()
+	_mouse(builder, Vector2i(4, 0), MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i(6, 2), MOUSE_BUTTON_LEFT, false)
+	assert(builder.parts.size() == 2, builder.status)
+	assert(MODULES.footprint(builder.parts[1]) == Rect2i(4, 0, 3, 3))
+	assert(MODULES.hull_polygon(builder.parts[1], Vector2.ZERO).size() == 3)
+	assert(not MODULES.occupies(builder.parts[1], Vector2i(6, 0)))
+	assert(MODULES.has_interior_floor(builder.parts[1], Vector2i(4, 2)))
+	assert(not MODULES.has_interior_floor(builder.parts[1], Vector2i(4, 0)))
+	assert(builder._design_dimensions().is_equal_approx(Vector2(3.5, 2.0)))
+	builder._toggle_view()
+	builder.palette_buttons.command_station.pressed.emit()
+	_mouse(builder, Vector2i.ZERO, MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i.ZERO, MOUSE_BUTTON_LEFT, false)
+	assert(builder.parts.size() == 3)
+	var glass := MODULES.window_render_context(builder.parts)
+	assert(glass.interior == [builder.parts[2]])
+	# The angled pane shares only three of the square pane's four edge cells.
+	# Keep the exposed one-cell tail, not the border underneath the join.
+	var seam_x := MODULES.part_position(builder.parts[1]).x - MODULES.FINE_CELL * 0.5
+	var exposed := 0.0
+	for rim: PackedVector2Array in glass.rims.values():
+		for i in range(0, rim.size(), 2):
+			if is_equal_approx(rim[i].x, seam_x) and is_equal_approx(rim[i + 1].x, seam_x):
+				exposed += rim[i].distance_to(rim[i + 1])
+	assert(is_equal_approx(exposed, MODULES.FINE_CELL), "Joined panes must not draw internal borders")
+	var second_square: Dictionary = builder.parts[0].duplicate()
+	second_square.x = 4
+	var joined := MODULES.window_render_context([builder.parts[0], second_square])
+	for rim: PackedVector2Array in joined.rims.values():
+		for i in range(0, rim.size(), 2):
+			assert(not (is_equal_approx(rim[i].x, seam_x) and is_equal_approx(rim[i + 1].x, seam_x)))
+	assert(MODULES.validate(builder.parts, false, false) == "")
+	var windows_reopened := LIBRARY.restore_design(JSON.parse_string(JSON.stringify(builder.parts)))
+	assert(windows_reopened.size() == 3 and windows_reopened[1].type == "window_wedge")
+	assert(MODULES.bounds(windows_reopened) == MODULES.bounds(builder.parts))
+	builder._toggle_view()
+	await _exercise_wedge_infill(builder)
+	await _exercise_circle(builder)
+	await _exercise_decorations(builder)
+	await _exercise_layout_cache(builder)
+	await process_frame
+	await process_frame
 	hangar.free()
 	print("Ship builder checks passed")
 	quit()
+
+func _exercise_decorations(builder: Control) -> void:
+	if builder.interior_view:
+		assert(not builder.palette_buttons.rivet.visible and not builder.palette_buttons.vent.visible)
+		builder._toggle_view()
+	assert(builder.category_labels["DECORATIONS"].visible)
+	var hull := {"type":"retro_plain", "fine_grid":true, "x":-4, "y":0, "width":12, "height":6, "rotation":0}
+	var island := {"type":"retro_plain", "fine_grid":true, "x":9, "y":1, "rotation":0}
+	builder.parts = [hull, island]
+	builder.part_rotation = 0
+	builder.part_flipped = false
+	builder.palette_buttons.rivet.pressed.emit()
+	var rivet_cell := Vector2i(1, 1)
+	_mouse(builder, rivet_cell, MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, rivet_cell, MOUSE_BUTTON_LEFT, false)
+	var rivet: Dictionary = builder.parts[-1]
+	assert(rivet.type == "rivet" and MODULES.is_decoration(rivet))
+	assert(MODULES.footprint(rivet) == Rect2i(1, 1, 1, 1), "One click places a one-cell rivet, including on a disconnected draft")
+	_mouse(builder, Vector2i(1, 2), MOUSE_BUTTON_RIGHT, true)
+	_mouse(builder, Vector2i(1, 2), MOUSE_BUTTON_RIGHT, false)
+	assert(MODULES.occupies(hull, Vector2i(1, 2)), "Decorations should erase without cutting hull")
+	builder.parts = [hull, rivet]
+	var before: Array = builder.parts.duplicate(true)
+	builder.palette_buttons.vent.pressed.emit()
+	builder.symmetry_button.button_pressed = true
+	_key(KEY_R)
+	var start := Vector2i(-3, 2)
+	var finish := Vector2i(-1, 3)
+	_mouse(builder, start, MOUSE_BUTTON_LEFT, true)
+	_motion(builder, finish)
+	var plan: Dictionary = builder._stretch_plan()
+	assert(plan.error == "" and plan.size == Vector2i(3, 2) and plan.pieces.size() == 2, plan.error)
+	await process_frame
+	_mouse(builder, finish, MOUSE_BUTTON_LEFT, false)
+	assert(builder.parts[2].type == "vent" and builder.parts[2].rotation == 1)
+	assert(MODULES.footprint(builder.parts[2]) == Rect2i(-3, 2, 3, 2))
+	assert(MODULES.footprint(builder.parts[3]) == Rect2i(4, 2, 3, 2))
+	_mouse(builder, finish, MOUSE_BUTTON_LEFT, true, true)
+	_mouse(builder, Vector2i(-1, 6), MOUSE_BUTTON_LEFT, false)
+	assert(MODULES.footprint(builder.parts[2]).size == Vector2i(3, 2), "Resize must not extend beyond the supporting hull")
+	_mouse(builder, finish, MOUSE_BUTTON_LEFT, true, true)
+	_mouse(builder, Vector2i(-1, 4), MOUSE_BUTTON_LEFT, false)
+	assert(MODULES.footprint(builder.parts[2]) == Rect2i(-3, 2, 3, 3))
+	assert(MODULES.footprint(builder.parts[3]) == Rect2i(4, 2, 3, 3))
+	assert(MODULES.stats(builder.parts) == MODULES.stats([hull]) and MODULES.bounds(builder.parts) == MODULES.bounds([hull]))
+	assert(not MODULES.validate(builder.parts + [rivet], false, false).is_empty(), "Decorations cannot overlap")
+	var placed: Array = builder.parts.duplicate(true)
+	var restored := LIBRARY.restore_design(JSON.parse_string(JSON.stringify(placed)))
+	assert(restored.size() == placed.size() and MODULES.validate(restored, false, false) == "")
+	for i in range(1, restored.size()):
+		assert(MODULES.is_decoration(restored[i]) and restored[i].type == placed[i].type)
+		assert(MODULES.footprint(restored[i]) == MODULES.footprint(placed[i]))
+		assert(int(restored[i].rotation) == placed[i].rotation and restored[i].flip_x == placed[i].flip_x)
+	_mouse(builder, start, MOUSE_BUTTON_RIGHT, true)
+	_mouse(builder, start, MOUSE_BUTTON_RIGHT, false)
+	assert(builder.parts == before, "Erase should remove the vent and its mirror without touching hull")
+	_key(KEY_Z, true)
+	assert(builder.parts == placed, "Undo should restore both decorations")
+	builder.symmetry_button.button_pressed = false
+
+func _exercise_layout_cache(builder: Control) -> void:
+	if builder.interior_view:
+		builder._toggle_view()
+	var profile_calls: Array[int] = []
+	builder.performance_profile = func(_parts: Array) -> Dictionary:
+		profile_calls.append(1)
+		return {"travel_acceleration":0.0, "normal_speed":0.0, "turn_rate":0.0, "boost":0.0, "hyperdrive":0.0}
+	builder.parts = [{"type":"retro_plain", "fine_grid":true, "x":-20, "y":-15, "width":40, "height":30, "rotation":0}]
+	builder.palette_buttons.retro_plain.pressed.emit()
+	builder.queue_redraw()
+	await process_frame
+	await process_frame
+	assert(profile_calls.size() == 1)
+	for x in range(4):
+		_motion(builder, Vector2i(x, -16))
+		await process_frame
+	assert(profile_calls.size() == 1, "Hovering should not recompute flight stats")
+	_mouse(builder, Vector2i(0, -16), MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i(3, -16), MOUSE_BUTTON_LEFT, false)
+	await process_frame
+	await process_frame
+	assert(profile_calls.size() == 2 and builder.layout_cache.dimensions == Vector2(20.0, 15.5))
+	_mouse(builder, Vector2i(0, -16), MOUSE_BUTTON_RIGHT, true)
+	_mouse(builder, Vector2i(0, -16), MOUSE_BUTTON_RIGHT, false)
+	await process_frame
+	await process_frame
+	assert(profile_calls.size() == 3 and builder.parts[-1].has("cutouts"), "Erasing in place must invalidate the layout")
+
+func _exercise_wedge_infill(builder: Control) -> void:
+	# A stretched window leaves half a slot open along its diagonal.
+	var pane := {"type":"window_wedge", "fine_grid":true, "x":0, "y":0, "width":2, "height":2, "rotation":0}
+	builder.parts = [pane]
+	builder.part_rotation = 0
+	builder.part_flipped = false
+	builder.palette_buttons.retro_wedge.pressed.emit()
+	var cell := Vector2i(1, 1)
+	var open_half := Vector2(0.25, -0.25)
+	_mouse(builder, cell, MOUSE_BUTTON_LEFT, true, false, open_half)
+	_mouse(builder, cell, MOUSE_BUTTON_LEFT, false, false, open_half)
+	assert(builder.parts.size() == 1 and builder.status == "Components cannot overlap.")
+	_key(KEY_R)
+	_key(KEY_R)
+	_mouse(builder, cell, MOUSE_BUTTON_LEFT, true, false, open_half)
+	_mouse(builder, cell, MOUSE_BUTTON_LEFT, false, false, open_half)
+	assert(builder.parts.size() == 2, builder.status)
+	var infill: Dictionary = builder.parts[1]
+	assert(infill.type == "retro_wedge" and MODULES.footprint(infill) == Rect2i(1, 1, 1, 1))
+	var neighbor := {"type":"retro_plain", "fine_grid":true, "x":2, "y":1, "rotation":0}
+	assert(MODULES.validate([pane, neighbor], false, false) == "Every component must connect to the ship.")
+	assert(MODULES.validate([pane, infill, neighbor], false, false) == "")
+	assert(MODULES.validate([pane, infill, infill.duplicate()], false, false) == "Components cannot overlap.")
+	var restored := LIBRARY.restore_design(JSON.parse_string(JSON.stringify(builder.parts)))
+	assert(restored.size() == 2 and MODULES.validate(restored, false, false) == "")
+	await process_frame
+	_mouse(builder, cell, MOUSE_BUTTON_RIGHT, true, false, open_half)
+	_mouse(builder, cell, MOUSE_BUTTON_RIGHT, false, false, open_half)
+	assert(builder.parts == [pane] and not pane.has("cutouts"))
+
+func _exercise_circle(builder: Control) -> void:
+	builder.parts = []
+	builder.palette_buttons.retro_plain.pressed.emit()
+	assert(not builder.circle_button.disabled)
+	builder.circle_button.set_pressed_no_signal(true)
+	builder.circle_button.pressed.emit()
+	assert(builder.selected_type == MODULES.CIRCLE_HULL and builder.palette_buttons.retro_plain.button_pressed)
+	_mouse(builder, Vector2i.ZERO, MOUSE_BUTTON_LEFT, true)
+	_mouse(builder, Vector2i.ZERO, MOUSE_BUTTON_LEFT, false)
+	assert(MODULES.footprint(builder.parts[0]).size == Vector2i.ONE)
+	builder._undo_edit()
+	assert(builder.parts.is_empty())
+	_mouse(builder, Vector2i.ZERO, MOUSE_BUTTON_LEFT, true)
+	_motion(builder, Vector2i(6, 2))
+	var preview: Dictionary = builder._stretch_plan()
+	assert(preview.error == "" and preview.size == Vector2i(7, 7))
+	_mouse(builder, Vector2i(6, 2), MOUSE_BUTTON_LEFT, false)
+	var circle: Dictionary = builder.parts[0]
+	assert(circle.type == MODULES.CIRCLE_HULL and MODULES.footprint(circle) == Rect2i(0, 0, 7, 7))
+	assert(not MODULES.occupies(circle, Vector2i.ZERO))
+	assert(MODULES.has_interior_floor(circle, Vector2i(3, 3)))
+	assert(MODULES.has_interior_floor(circle, Vector2i(6, 3)))
+	var cells := MODULES.occupied_cells(circle)
+	assert(cells.size() == 37)
+	var hull := MODULES.structural_polygons(circle, Vector2.ZERO)
+	for cell in MODULES.occupied_cells({"type":"retro_plain", "x":0, "y":0, "width":7, "height":7, "rotation":0}):
+		var point := Vector2(cell) * MODULES.FINE_CELL
+		assert(hull.any(func(shape: PackedVector2Array) -> bool: return Geometry2D.is_point_in_polygon(point, shape)) == cells.has(cell))
+	for shape in hull:
+		for i in range(shape.size()):
+			var edge: Vector2 = shape[(i + 1) % shape.size()] - shape[i]
+			assert(is_zero_approx(edge.x) or is_zero_approx(edge.y))
+	var attached := {"type":"retro_plain", "fine_grid":true, "x":7, "y":3, "rotation":0}
+	assert(MODULES.validate([circle, attached], false, false) == "")
+	attached.y = 0
+	assert(MODULES.validate([circle, attached], false, false) == "Every component must connect to the ship.")
+	assert(is_equal_approx(MODULES.stats([circle]).mass, 8.0 * cells.size() / 16.0))
+	var smooth := circle.duplicate()
+	smooth.type = "hull_circle"
+	assert(MODULES.structural_polygons(smooth, Vector2.ZERO)[0].size() == 48)
+	assert(not MODULES.has_interior_floor(smooth, Vector2i(6, 3)))
+	assert(LIBRARY.restore_design(JSON.parse_string(JSON.stringify([smooth]))).size() == 1)
+
+	_mouse(builder, Vector2i(6, 3), MOUSE_BUTTON_LEFT, true, true)
+	_mouse(builder, Vector2i(9, 3), MOUSE_BUTTON_LEFT, false, true)
+	circle = builder.parts[0]
+	assert(MODULES.footprint(circle).size == Vector2i(10, 10), builder.status)
+	var mass: float = MODULES.stats([circle]).mass
+	MODULES.remove_block(circle, Vector2i(4, 4))
+	assert(not MODULES.occupies(circle, Vector2i(4, 4)) and MODULES.stats([circle]).mass < mass)
+	var restored := LIBRARY.restore_design(JSON.parse_string(JSON.stringify(builder.parts)))
+	assert(restored.size() == 1 and restored[0].type == MODULES.CIRCLE_HULL)
+	assert(MODULES.footprint(restored[0]) == MODULES.footprint(circle) and restored[0].cutouts == circle.cutouts)
+	assert(MODULES.validate(restored, false, false) == "")
+	await process_frame
+	builder._toggle_view()
+	assert(builder.circle_button.disabled)
+	await process_frame

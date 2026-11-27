@@ -119,10 +119,14 @@ func _ready() -> void:
 func show_ship(ship: Dictionary, cargo: Dictionary, capacity: int) -> void:
 	ship_title.text = ship.name
 	ship_title.tooltip_text = ship.name
-	cargo_label.text = "CARGO   %d / %d   ·   %d iron  ·  %d tritium" % [int(cargo.iron) + int(cargo.tritium), capacity, cargo.iron, cargo.tritium] if capacity > 0 else "NO CARGO HOLD"
+	var freight := int(cargo.get("contracts", 0))
+	var held := int(cargo.iron) + int(cargo.tritium) + freight
+	cargo_label.text = "CARGO   %d / %d   ·   %d iron  ·  %d tritium" % [held, capacity, cargo.iron, cargo.tritium] if capacity > 0 else "NO CARGO HOLD"
+	if freight > 0:
+		cargo_label.text += "  ·  %d freight" % freight
 	cargo_bar.visible = capacity > 0
 	cargo_bar.max_value = maxi(capacity, 1)
-	cargo_bar.value = int(cargo.iron) + int(cargo.tritium)
+	cargo_bar.value = held
 	var orders: Array = ship.orders
 	var has_current_order := not orders.is_empty()
 	if has_current_order:

@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Space Game — Combustion engine preview</title>
+<style>
+  :root { color-scheme: dark light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 var(--font-sans, system-ui, sans-serif); color: var(--foreground, light-dark(#22242a, #ecedf0)); }
+  main { max-width: 1040px; margin-inline: auto; padding: 12px 0; }
+  header, .controls, section { margin-inline: 12px; }
+  .eyebrow, .number, output { font: 600 10px/1.4 var(--font-mono, ui-monospace, monospace); letter-spacing: .11em; text-transform: uppercase; }
+  .muted, .eyebrow, .number { color: var(--muted-foreground, light-dark(#535b69, #a8aebb)); }
+  h1 { font-size: 25px; line-height: 1.18; letter-spacing: -.035em; margin: 5px 0 6px; }
+  header p { margin: 0; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 16px 12px; }
+  .throttle { display: flex; flex: 1 1 218px; align-items: center; gap: 9px; padding-inline: 11px; min-height: 36px; border: 1px solid var(--border, light-dark(#d6dbe2, #3b414b)); border-radius: 7px; }
+  label { font-size: 12px; font-weight: 600; }
+  input { width: 72px; min-width: 40px; flex: 1; accent-color: var(--foreground, light-dark(#263447, #d8e9ff)); }
+  output { text-align: right; letter-spacing: 0; min-width: 4ch; font-variant-numeric: tabular-nums; }
+  button { min-height: 36px; white-space: nowrap; border: 1px solid var(--border, light-dark(#d6dbe2, #3b414b)); background: transparent; color: inherit; border-radius: 7px; padding: 0 11px; font: 600 12px var(--font-sans, system-ui, sans-serif); cursor: pointer; }
+  button:hover, button[aria-pressed="true"] { background: var(--secondary, light-dark(#e9edf3, #282d37)); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--ring, #5d9beb); outline-offset: 3px; }
+  section { display: grid; grid-template-columns: minmax(0, 1.95fr) minmax(0, 1fr); align-items: center; gap: 16px; padding-block: 10px; border-bottom: 1px solid var(--border, light-dark(#d6dbe2, #3b414b)); }
+  section:last-of-type { border-bottom: 0; }
+  .stage { aspect-ratio: 480 / 146; width: 100%; display: block; border-radius: 8px; background: #080c14; }
+  h2 { font-size: 17px; line-height: 1.2; letter-spacing: -.018em; margin: 3px 0 5px; }
+  .description p { margin: 0; font-size: 12px; line-height: 1.42; }
+  @media (max-width: 570px) {
+    section { grid-template-columns: minmax(0, 1fr); gap: 8px; padding-block: 9px 12px; }
+    .description { grid-row: 1; }
+  }
+  @media (max-width: 435px) { .throttle { flex-basis: 100%; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Space Game / Flight effects</div>
+    <h1>Combustion engine variants</h1>
+    <p class="muted">Three bright rocket flames, with tight edges and no smoke.</p>
+  </header>
+  <div class="controls" aria-label="Shared engine controls">
+    <div class="throttle">
+      <label for="throttle">Throttle</label>
+      <input id="throttle" type="range" min="0" max="100" value="85">
+      <output id="readout" for="throttle" aria-live="off">85%</output>
+    </div>
+    <button type="button" id="cycle" aria-pressed="false">Cycle thrust</button>
+    <button type="button" id="play">Pause motion</button>
+  </div>
+  <section aria-labelledby="compact">
+    <canvas class="stage" width="960" height="292" role="img" aria-label="Fighter with two short white-hot flames and a few tiny amber embers"></canvas>
+    <div class="description">
+      <div class="number">01 / Compact</div>
+      <h2 id="compact">Short Bell</h2>
+      <p class="muted">A compact, white-hot flame with a few tiny embers that fade just past the tip.</p>
+    </div>
+  </section>
+  <section aria-labelledby="banded">
+    <canvas class="stage" width="960" height="292" role="img" aria-label="Fighter with long narrow gold exhaust jets broken up by bright diamond-shaped bands"></canvas>
+    <div class="description">
+      <div class="number">02 / Banded</div>
+      <h2 id="banded">Shock Diamond</h2>
+      <p class="muted">A longer, narrower jet with evenly spaced bright bands that hold their shape under thrust.</p>
+    </div>
+  </section>
+  <section aria-labelledby="boost">
+    <canvas class="stage" width="960" height="292" role="img" aria-label="Fighter with two broad white and gold booster flames"></canvas>
+    <div class="description">
+      <div class="number">03 / Booster</div>
+      <h2 id="boost">Full Burn</h2>
+      <p class="muted">A broad white-gold flame with a smooth orange edge and the strongest glow on the hull.</p>
+    </div>
+  </section>
+  <noscript><p>Enable JavaScript to run the animations.</p></noscript>
+</main>
+<script>
+(() => {
+  'use strict';
+  const W = 480, H = 146, SCALE = 2;
+  const ship = { x: 60, y: 16, w: 169, h: 113 };
+  const ports = [397, 161].map(x => ({
+    x: ship.x + ship.w * 783 / 833,
+    y: ship.y + ship.h * (556 - x) / 557
+  }));
+  const styles = [
+    { length: 81, width: 8.1, response: .16, flow: 240, glow: .52, tint: [255, 123, 43] },
+    { length: 185, width: 7.0, response: .22, flow: 340, glow: .62, tint: [255, 157, 57] },
+    { length: 157, width: 11.4, response: .30, flow: 265, glow: .82, tint: [255, 141, 50] }
+  ];
+  const clamp = x => Math.min(1, Math.max(0, x));
+  const mix = (a, b, t) => a + (b - a) * t;
+  const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+  const throttle = document.querySelector('#throttle');
+  const readout = document.querySelector('#readout');
+  const cycle = document.querySelector('#cycle');
+  const play = document.querySelector('#play');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let paused = reducedMotion.matches, cycling = false;
+  let time = 0, cycleStart = 0, previous = null, request = 0;
+  const initial = Number(throttle.value) / 100;
+  const settled = (at, power) => [{ at: at - 1, power }, { at, power }];
+  const engines = [...document.querySelectorAll('.stage')].map((canvas, kind) => ({
+    ctx: canvas.getContext('2d'), kind, style: styles[kind], power: initial, history: settled(time, initial)
+  }));
+
+  function buffer(w, h) { return Object.assign(document.createElement('canvas'), {width: w, height: h}); }
+  const hull = buffer(ship.w * SCALE, ship.h * SCALE);
+  const hullCtx = hull.getContext('2d');
+  const lighting = buffer(hull.width, hull.height);
+  const lightCtx = lighting.getContext('2d');
+  const background = buffer(W * SCALE, H * SCALE);
+  const bg = background.getContext('2d');
+  const JET_W = 192, JET_H = 40, SAMPLES = 2;
+  const jet = buffer(JET_W * SAMPLES, JET_H * SAMPLES);
+  const jetCtx = jet.getContext('2d');
+  const image = jetCtx.createImageData(jet.width, jet.height);
+  let hullReady = false;
+
+  bg.scale(SCALE, SCALE);
+  const sky = bg.createLinearGradient(0, 0, W, H);
+  sky.addColorStop(0, '#141c2a');
+  sky.addColorStop(.54, '#090e18');
+  sky.addColorStop(1, '#060910');
+  bg.fillStyle = sky;
+  bg.fillRect(0, 0, W, H);
+  let seed = 74;
+  const rand = () => ((seed = (Math.imul(1664525, seed) + 1013904223) >>> 0) / 4294967296);
+  for (let i = 0; i < 112; ++i) {
+    const x = rand() * W, y = rand() * H, a = rand();
+    bg.fillStyle = `rgba(194,212,240,${.05 + .33 * a ** 3})`;
+    const size = a > .94 ? 1.2 : .6;
+    bg.fillRect(x, y, size, size);
+  }
+  bg.lineWidth = .65;
+  bg.strokeStyle = 'rgba(192,209,239,.19)';
+  bg.beginPath();
+  for (const [x,y,dx,dy] of [[13,13,1,1],[W-13,13,-1,1],[13,H-13,1,-1],[W-13,H-13,-1,-1]]) {
+    bg.moveTo(x, y + 7 * dy); bg.lineTo(x, y); bg.lineTo(x + 7 * dx, y);
+  }
+  bg.stroke();
+
+  function glow(ctx, x, y, rx, ry, rgb, opacity) {
+    if (opacity <= .002) return;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(rx, ry);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, `rgba(${rgb.join(',')},${opacity})`);
+    g.addColorStop(.40, `rgba(${rgb.join(',')},${opacity * .32})`);
+    g.addColorStop(1, `rgba(${rgb.join(',')},0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(-1, -1, 2, 2);
+    ctx.restore();
+  }
+
+  function drawFlame(engine, port, pair) {
+    const {ctx, kind, style, history, power} = engine;
+    if (power < .003 && history.every(sample => sample.power < .003)) return;
+    const phase = time * 17 + pair * 1.8;
+    const breathe = .62 * Math.sin(phase) + .38 * Math.sin(phase * 1.83 + kind);
+    const windowStart = time - style.length / style.flow - .05;
+    // Keep a single taper while the older exhaust leaves, rather than breaking it into blobs.
+    let span = power;
+    for (const sample of history) if (sample.at >= windowStart) span = Math.max(span, sample.power);
+    const length = style.length * (.24 + .76 * span) * (1 + (kind === 0 ? .072 : .028) * breathe);
+    const limit = Math.min(jet.width, Math.ceil(length * SAMPLES));
+    const data = image.data;
+    data.fill(0);
+    let index = history.length - 2;
+    for (let col = 0; col < limit; col++) {
+      const x = col / SAMPLES;
+      // Exhaust already out of the nozzle keeps moving when throttle drops.
+      const emitted = time - x / style.flow;
+      while (index > 0 && history[index].at > emitted) index--;
+      const a = history[index], b = history[index + 1];
+      const feed = mix(a.power, b.power, clamp((emitted - a.at) / (b.at - a.at)));
+      if (feed < .003) continue;
+      const u = x / length;
+      const heat = smooth(0, .18, feed) * (.79 + .21 * feed);
+      const taper = Math.pow(1 - u, kind === 0 ? .68 : kind === 1 ? .38 : .53);
+      let shape, centralHeat, cells = 0;
+      if (kind === 0) {
+        shape = (.88 + .22 * Math.sin(Math.PI * Math.min(1, u * 2.4))) * taper;
+        centralHeat = 1 - smooth(.08, .73, u);
+      } else if (kind === 1) {
+        const period = 15 + 13 * feed;
+        const cellPhase = (x + 5) / period + .016 * breathe;
+        const wave = 1 - Math.abs(2 * (cellPhase - Math.floor(cellPhase)) - 1);
+        cells = wave ** 1.7 * smooth(3, 14, x) * (1 - smooth(.52, .99, u));
+        shape = (.75 + .43 * cells + .19 * Math.exp(-x * .12)) * taper;
+        centralHeat = (.48 + .67 * cells + .40 * Math.exp(-x * .14)) * (1 - smooth(.22, .95, u));
+      } else {
+        shape = (.76 + .33 * smooth(0, .16, u)) * taper * (1 + .022 * breathe);
+        const ripple = .115 * Math.sin(x * .22 - time * 27 + pair) * smooth(.17, .44, u);
+        centralHeat = 1.03 - .94 * smooth(.15, .88, u) + ripple;
+      }
+      const width = style.width * (.58 + .42 * feed) * Math.max(.05, shape);
+      const center = (JET_H * .5 + Math.sin(phase * .83 - u * 4) * u * u * .55) * SAMPLES;
+      const reach = width * SAMPLES;
+      for (let y = Math.max(0, Math.ceil(center - 1.5 * reach)); y < Math.min(jet.height, center + 1.5 * reach); y++) {
+        const r = Math.abs(y + .5 - center) / reach;
+        const edge = 1 - smooth(.56, 1.18, r);
+        const coreWidth = kind === 2 ? .83 : kind === 1 ? .64 : .71;
+        const core = (1 - smooth(.10, coreWidth, r)) * centralHeat;
+        const gold = (1 - smooth(.35, 1.05, r)) * (1 - .35 * smooth(.45, 1, u));
+        const tip = 1 - smooth(kind === 1 ? .59 : .62, 1, u);
+        const alpha = clamp(heat * tip * (edge * (.79 + .17 * gold + .11 * cells) + .32 * core));
+        if (alpha < .004) continue;
+        const white = clamp(core * 1.48);
+        const i = (y * jet.width + col) * 4;
+        data[i] = 255;
+        data[i + 1] = mix(71 + 105 * gold, 255, white);
+        data[i + 2] = mix(13 + 49 * gold, 244, white);
+        data[i + 3] = 255 * alpha;
+      }
+    }
+    jetCtx.putImageData(image, 0, 0);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const nearHeat = smooth(0, .23, power) * (.65 + .35 * power);
+    glow(ctx, port.x + 12, port.y, style.length * .49, style.width * 2.52, style.tint, nearHeat * .30);
+    ctx.drawImage(jet, port.x - 2, port.y - JET_H / 2, JET_W, JET_H);
+    if (kind === 0) drawEmbers(ctx, port, pair, history);
+    ctx.restore();
+  }
+
+  function fleck(seed) {
+    const n = Math.sin(seed * 127.1 + 14.5) * 43758.5453;
+    return n - Math.floor(n);
+  }
+
+  function drawEmbers(ctx, port, pair, history) {
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 6; i++) {
+      const lane = i + pair * 8;
+      const period = .37 + .11 * fleck(lane);
+      const clock = time / period + (i + .4 * fleck(lane + 129)) / 6;
+      const lap = Math.floor(clock);
+      const age = (clock - lap) * period;
+      const key = lane + lap * 31;
+      const life = period * (.83 + .14 * fleck(key + 38));
+      if (age >= life) continue;
+      const emitted = time - age;
+      let index = history.length - 2;
+      while (index > 0 && history[index].at > emitted) index--;
+      const a = history[index], b = history[index + 1];
+      const feed = mix(a.power, b.power, clamp((emitted - a.at) / (b.at - a.at)));
+      if (feed < .10 || fleck(key + 57) > .25 + feed) continue;
+
+      const u = age / life;
+      const x = port.x + (64 + 35 * fleck(key + 71)) * (.4 + .6 * feed) * u;
+      const side = i % 2 ? 1 : -1;
+      const drift = (1.3 + 1.7 * fleck(key + 90)) + u * (2.4 + 3.7 * fleck(key + 18));
+      const y = port.y + side * drift;
+      const alpha = smooth(.10, .55, feed) * smooth(.05, .24, u) * (1 - smooth(.46, 1, u)) * (.47 + .34 * fleck(key + 21));
+      if (alpha < .02) continue;
+      ctx.strokeStyle = `rgba(255,${Math.round(mix(224, 133, u))},${Math.round(mix(158, 48, u))},${alpha})`;
+      ctx.lineWidth = .48 + .29 * fleck(key + 5);
+      ctx.beginPath();
+      ctx.moveTo(x - 1.1 - fleck(key + 29), y - side * .11);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawShip({ctx, style, power}) {
+    if (!hullReady) return;
+    ctx.drawImage(hull, ship.x, ship.y, ship.w, ship.h);
+    if (power < .003) return;
+    const heat = smooth(0, .32, power) * (.64 + .36 * power);
+    lightCtx.clearRect(0, 0, lighting.width, lighting.height);
+    lightCtx.save();
+    lightCtx.scale(SCALE, SCALE);
+    for (const {x, y} of ports) {
+      glow(lightCtx, x - ship.x - 4, y - ship.y, 32 + style.width, 19 + style.width, style.tint, heat * style.glow);
+      glow(lightCtx, x - ship.x - 1, y - ship.y, 12, 7, [255, 222, 156], heat * .48);
+    }
+    lightCtx.restore();
+    lightCtx.globalCompositeOperation = 'destination-in';
+    lightCtx.drawImage(hull, 0, 0);
+    lightCtx.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.drawImage(lighting, ship.x, ship.y, ship.w, ship.h);
+    ctx.restore();
+  }
+
+  function draw() {
+    for (const engine of engines) {
+      engine.ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+      engine.ctx.drawImage(background, 0, 0, W, H);
+      ports.forEach((port, pair) => drawFlame(engine, port, pair));
+      drawShip(engine);
+    }
+  }
+  function showThrottle() { readout.value = `${throttle.value}%`; }
+  function update(dt) {
+    if (cycling) {
+      const phase = (time - cycleStart) % 8;
+      throttle.value = phase < 2.3 ? 100 : phase < 4 ? 38 : phase < 6.3 ? 100 : 0;
+      showThrottle();
+    }
+    const target = Number(throttle.value) / 100;
+    for (const engine of engines) {
+      const response = engine.style.response * (target < engine.power ? .65 : 1);
+      engine.power = mix(engine.power, target, 1 - Math.exp(-dt / response));
+      if (Math.abs(engine.power - target) < .002) engine.power = target;
+      engine.history.push({at: time, power: engine.power});
+      while (engine.history[1].at < time - .9) engine.history.shift();
+    }
+  }
+  function animate(now) {
+    request = 0;
+    if (paused) return;
+    if (previous === null || now - previous >= 22) {
+      const dt = previous === null ? 1 / 60 : Math.min(.1, (now - previous) / 1000);
+      previous = now;
+      time += dt;
+      update(dt);
+      draw();
+    }
+    request = requestAnimationFrame(animate);
+  }
+  function syncPlay() {
+    play.textContent = paused ? 'Play motion' : 'Pause motion';
+    if (paused) {
+      if (request) cancelAnimationFrame(request);
+      request = 0;
+      previous = null;
+    } else if (!request) request = requestAnimationFrame(animate);
+  }
+  function setCycle(enabled) {
+    cycling = enabled;
+    cycleStart = time;
+    cycle.setAttribute('aria-pressed', String(enabled));
+    if (enabled && paused) { paused = false; syncPlay(); }
+  }
+  throttle.addEventListener('input', () => {
+    setCycle(false);
+    showThrottle();
+    if (!paused) return;
+    const power = Number(throttle.value) / 100;
+    for (const engine of engines) { engine.power = power; engine.history = settled(time, power); }
+    draw();
+  });
+  cycle.addEventListener('click', () => setCycle(!cycling));
+  play.addEventListener('click', () => { paused = !paused; syncPlay(); });
+  const art = new Image();
+  art.onload = () => {
+    hullCtx.translate(0, hull.height);
+    hullCtx.rotate(-Math.PI / 2);
+    hullCtx.drawImage(art, 0, 0, hull.height, hull.width);
+    hullReady = true;
+    draw();
+  };
+  art.src = './ship-sprites/starters/small-fighter.png';
+  draw();
+  syncPlay();
+})();
+</script>
+</body>
+</html>

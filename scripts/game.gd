@@ -13,7 +13,7 @@ class ExhaustParticle:
 	var streak: Vector2
 	var born: float
 	var lifetime: float
-	var radius: float
+	var width: float
 	var opacity: float
 
 # Movement values are deliberately collected here for quick feel adjustments.
@@ -27,6 +27,8 @@ const COMBAT_CONTROLLER := preload("res://scripts/combat_controller.gd")
 const MINING_CONTROLLER := preload("res://scripts/mining_controller.gd")
 const GAME_INPUT := preload("res://scripts/game_input.gd")
 const GAME_HUD := preload("res://scripts/game_hud.gd")
+const DEBUG_TUNING := preload("res://scripts/debug_tuning.gd")
+const DEBUG_MENU := preload("res://scripts/debug_menu.gd")
 const FLIGHT_NAVIGATION := preload("res://scripts/flight_navigation.gd")
 const FLEET_AVOIDANCE := preload("res://scripts/ships/fleet_avoidance.gd")
 const PROJECTILE_GEOMETRY := preload("res://scripts/projectile_geometry.gd")
@@ -37,12 +39,14 @@ const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const SAVES := preload("res://scripts/galaxy_saves.gd")
 const HOME_MENU := preload("res://scripts/home_menu.gd")
 const MODULES := preload("res://scripts/ship_modules.gd")
+const SHIP_RANDOMIZER := preload("res://scripts/ship_randomizer.gd")
 const LOADOUT := preload("res://scripts/ship_loadout.gd")
 const HANGAR := preload("res://scripts/hangar.gd")
 const SHIP_LIBRARY := preload("res://scripts/ship_design_library.gd")
 const SETTINGS_MENU := preload("res://scripts/settings_menu.gd")
 const KEY_BINDINGS := preload("res://scripts/key_bindings.gd")
 const ROCKET_ENGINE_AUDIO := preload("res://scripts/rocket_engine_audio.gd")
+const SHORT_BELL := preload("res://scripts/short_bell_exhaust.gd")
 const SHIP_SUNLIGHT := preload("res://scripts/ship_sunlight.gdshader")
 const SHIP_RELIEF := preload("res://scripts/ship_relief.gd")
 const FLEET_COLLISION_LAYER := 1
@@ -63,25 +67,22 @@ const NEUTRAL_SHIP_COLOR := Color("9bbfd0")
 const HOSTILE_SHIP_COLOR := Color("ff7668")
 const DISPLAY_SPEED_SCALE := 100.0
 const DISPLAY_KM_SPEED_UNIT := MODULES.WORLD_UNITS_PER_METER * 1000.0 / DISPLAY_SPEED_SCALE
-const BOOST_TRAVEL_SPEED := 6141.25
+const BOOST_TRAVEL_SPEED := 18423.75
 const BOOST_TRAVEL_ACCELERATION := 6200.0
 const HYPERJUMP_COLOR := Color("9ee9ff")
-const HYPERJUMP_TRAVEL_SPEED := 25500.0
+const HYPERJUMP_TRAVEL_SPEED := 382500.0
 const HYPERJUMP_ACCELERATION_SECONDS := 8.0
 const FLEET_JUMP_INTERVAL := 0.5
 const JUMP_FINAL_APPROACH_RANGE := 600.0
 const EXHAUST_PARTICLE_MIN_ZOOM := 0.12
 const EXHAUST_PARTICLE_LIMIT := 1600
-const ENGINE_TRAIL_LIFETIME := 2.8
 const BOOST_TRAIL_LIFETIME := 6.0
 const ENGINE_TRAIL_INTERVAL := 0.05
 const ENGINE_IGNITION_RATE := 9.0
 const ENGINE_FADE_RATE := 5.0
 const RADIAL_MENU_RADIUS := 72.0
-const EXHAUST_SPARK_HOT := Color("fff2c4")
-const EXHAUST_SPARK_COOL := Color("fa602f")
-const EXHAUST_PLUME_HOT := Color("ff873d")
-const EXHAUST_PLUME_COOL := Color("b14431")
+const EXHAUST_SPARK_HOT := Color("ffe2a6")
+const EXHAUST_SPARK_COOL := Color("ff8530")
 const CAMERA_ZOOM_STEP := 1.28
 const CAMERA_PAN_SPEED := 700.0
 const CAMERA_MAX_SHIP_SCREEN_FRACTION := 0.25
@@ -127,6 +128,12 @@ const WEAPON_SLOTS := [
 var combat_controller = COMBAT_CONTROLLER.new(self)
 var game_input = GAME_INPUT.new(self)
 var game_hud = GAME_HUD.new(self)
+
+const JOB_BOARD := preload("res://scripts/job_board.gd")
+const JOB_BOARD_MENU := preload("res://scripts/job_board_menu.gd")
+const MISSION_WORLD := preload("res://scripts/mission_world.gd")
+var missions := MISSION_WORLD.new(self)
+var jobs_menu: JOB_BOARD_MENU
 
 const SHIP_STATE := preload("res://scripts/ships/ship_state.gd")
 const SHIP_VERSIONS := preload("res://scripts/ships/ship_version_catalog.gd")
@@ -224,6 +231,16 @@ var solar_system: SOLAR_SYSTEM
 var home_layer: CanvasLayer
 var home_menu: HOME_MENU
 var game_started := false
+var debug_tuning := DEBUG_TUNING.new()
+var debug_menu: DEBUG_MENU
+var debug_sandbox := false
+var debug_spacing := 1.0
+var debug_boot := {}
+var debug_campaign: Node2D
+var debug_campaign_designs: Array[Dictionary] = []
+var debug_switch_pending := false
+var debug_hidden_layers: Array[CanvasLayer] = []
+var debug_previous_process_mode := PROCESS_MODE_INHERIT
 var world_size := Vector2.ZERO
 # Temporary steering waypoints; order destinations remain unchanged.
 var fleet_detours := {}
@@ -255,6 +272,10 @@ var cached_ship_scale := 1.0
 var cached_turret_mounts: Array[Dictionary] = []
 var cached_engines: Array[Dictionary] = []
 var cached_hull_shapes: Array[PackedVector2Array] = []
+var cached_tiled_hull: ArrayMesh
+var cached_window_context: Dictionary = {}
+var cached_ship_decorations: Array = []
+var player_shield_glow_count := 0
 var cached_armour_borders: Dictionary = {}
 var has_flight_controls := false
 
@@ -305,11 +326,13 @@ var camera_galaxy_position := PackedFloat64Array([0.0, 0.0])
 var camera_following := true
 var camera_ship_index := 0
 var camera_dragging := false
+var debug_shortcut_button: Button
 var graphics_quality := 2
 var frame_cap := 0
 var vsync_enabled := false
 var graphics_settings_path := "user://graphics_settings.cfg"
 var engine_light_texture: GradientTexture2D
+var short_bell_texture: ImageTexture
 var engine_audio := ROCKET_ENGINE_AUDIO.new()
 @onready var heritage_gun_audio: AudioStreamPlayer = $HeritageGunAudio
 
@@ -327,11 +350,13 @@ func _ready() -> void:
 	home_menu.new_game_requested.connect(_start_new_game)
 	home_menu.load_game_requested.connect(_load_game)
 	home_layer.add_child(home_menu)
+	if debug_sandbox:
+		_start_debug_flight.call_deferred()
 
 func _start_new_game(title: String, galaxy: Dictionary, contents: Dictionary) -> void:
 	if is_instance_valid(hangar_layer):
 		return
-	home_menu.set_process_unhandled_input(false)
+	home_menu.set_process_input(false)
 	_create_ship_editor([], "Back to galaxy setup", func(parts: Array):
 		_close_hangar(false)
 		galaxy_name = title
@@ -393,6 +418,8 @@ func _valid_flight_save(state: Dictionary) -> bool:
 		for property in ["heading", "hull", "shield", "shield_delay"]:
 			if not SHIP_STATE.finite_number(ship.get(property)):
 				return false
+	if format >= 5 and not JOB_BOARD.valid(state.get("jobs"), state.count, ids):
+		return false
 	return not current or ids.has(state.active_ship_id)
 
 func _start_flight(galaxy: Dictionary, contents: Dictionary, state: Dictionary, launch_parts: Array = []) -> void:
@@ -420,6 +447,7 @@ func _start_flight(galaxy: Dictionary, contents: Dictionary, state: Dictionary, 
 	add_child(player_fleet_body)
 	solar_system = SOLAR_SYSTEM.new()
 	solar_system.configure(galaxy, contents)
+	solar_system.set_orbit_rates(0.0, debug_tuning.factor("planet"), debug_tuning.factor("moon"))
 	solar_system.set_origin(galaxy_origin[0], galaxy_origin[1])
 	_create_flight_visuals()
 	_create_top_controls()
@@ -433,6 +461,9 @@ func _start_flight(galaxy: Dictionary, contents: Dictionary, state: Dictionary, 
 			"hull": player_hull, "shield": player_shield, "shield_delay": player_shield_delay})
 	else:
 		_restore_flight(state)
+		if int(state.get("format_version", 1)) >= 5:
+			missions.board.restore(state.jobs)
+	missions.sync_cargo()
 	_select_fleet_ship(active_fleet_index)
 	camera_ship_index = active_fleet_index
 	_ensure_ship_cache()
@@ -440,7 +471,7 @@ func _start_flight(galaxy: Dictionary, contents: Dictionary, state: Dictionary, 
 	_set_camera_zoom(_maximum_camera_zoom())
 	_load_asteroids_near_ship()
 	starfield_camera_center = _camera_center()
-	if ENEMY_SHIPS_ENABLED:
+	if _enemy_waves_enabled():
 		_spawn_enemy_wave()
 	for star_index in range(190):
 		stars.append({
@@ -509,14 +540,18 @@ func _migrate_navigation_order(ship: Dictionary) -> void:
 		order.progress = {"travel_target": nav.target, "jump_distance": nav.distance}
 
 func _save_galaxy() -> bool:
+	if debug_sandbox:
+		return true # No campaign slot or save side effects for test flights.
 	_save_active_fleet_ship()
 	var saved_ships: Array[Dictionary] = []
 	for ship in fleet:
-		saved_ships.append(SHIP_STATE.snapshot(ship))
+		var record := SHIP_STATE.snapshot(ship)
+		record.cargo.erase("contracts") # Derived from the contract ledger on load.
+		saved_ships.append(record)
 	var state := {"name": galaxy_name, "seed": galaxy_seed, "count": solar_system.systems.size(), "fleet": saved_ships,
 		"generator_version": solar_system.galaxy.generator_version, "active_ship_id": fleet[active_fleet_index].id,
 		"next_ship_id": ship_registry.next_id, "clock": simulation_clock.snapshot(), "play_time": play_time,
-		"ore_remaining": depleted_ore, "galaxy_origin": galaxy_origin, "ship_versions": ship_version_catalog}
+		"ore_remaining": depleted_ore, "galaxy_origin": galaxy_origin, "ship_versions": ship_version_catalog, "jobs": missions.board.snapshot()}
 	if GALAXY.is_wide_version(solar_system.galaxy.generator_version):
 		state.arms = int(solar_system.galaxy.spiral.get("arms", GALAXY.DEFAULT_ARMS))
 	var saved := SAVES.write(save_slot, state)
@@ -529,6 +564,10 @@ func _show_save_error() -> void:
 	settings_layer.get_child(0).set_save_status("Could not save this galaxy. Try Save game again.")
 
 func _save_from_settings(return_home: bool) -> void:
+	if debug_sandbox:
+		if return_home:
+			_exit_debug_flight()
+		return
 	if not _save_galaxy():
 		settings_layer.get_child(0).set_save_status("Could not save this galaxy. Try again before leaving.")
 	elif return_home:
@@ -549,6 +588,7 @@ func _create_flight_visuals() -> void:
 	engine_light_texture.fill = GradientTexture2D.FILL_RADIAL
 	engine_light_texture.fill_from = Vector2(0.5, 0.5)
 	engine_light_texture.fill_to = Vector2(1.0, 0.5)
+	short_bell_texture = ImageTexture.create_from_image(SHORT_BELL.make_flame_image())
 	# Keep the world and ship layers behind the game's foreground drawing.
 	world_background = _add_draw_layer(self, _draw_background)
 	world_background.show_behind_parent = true
@@ -585,20 +625,25 @@ func _add_sunlit_ship_layer(parent: Node, hull: Callable, visual: Node2D) -> voi
 
 func _add_ship_visual(parent: Node, exhaust: Callable, hull: Callable, details: Callable, effects: Callable) -> ShipVisual:
 	var visual := ShipVisual.new()
+	visual.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 	_add_sunlit_ship_layer(parent, hull, visual)
 	visual.exhaust = _add_draw_layer(visual, exhaust)
 	visual.exhaust.show_behind_parent = true
+	visual.exhaust.material = exhaust_particles_visual.material
+	visual.exhaust.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	visual.details = _add_draw_layer(visual, details)
 	visual.details.use_parent_material = true
 	visual.effects = _add_draw_layer(visual, effects)
 	return visual
 
-func _add_engine_light(visual: ShipVisual, nozzle: Transform2D, effect_scale: float = 1.0) -> void:
+func _add_engine_light(visual: ShipVisual, engine: Dictionary) -> void:
+	var nozzle: Transform2D = engine.nozzle
+	var half_width: float = engine.bell_size.x
 	var light := PointLight2D.new()
 	light.texture = engine_light_texture
-	light.color = Color(1.0, 0.56, 0.24)
-	light.texture_scale = 1.35 * effect_scale
-	light.position = nozzle * Vector2(0.0, 6.0 * effect_scale)
+	light.color = Color(1.0, 0.62, 0.30)
+	light.texture_scale = half_width * 9.0 / float(engine_light_texture.width)
+	light.position = nozzle * Vector2(0.0, half_width * 0.18)
 	light.energy = 0.0
 	visual.add_child(light)
 	visual.engine_lights.append(light)
@@ -607,7 +652,7 @@ func _set_engine_lighting(visual: ShipVisual, strength: float) -> void:
 	for index in range(visual.engine_lights.size()):
 		var light := visual.engine_lights[index]
 		light.visible = strength > 0.01
-		light.energy = strength * (0.65 + 0.08 * sin(elapsed * 19.0 + float(index) * 2.3))
+		light.energy = strength * 0.65 * SHORT_BELL.flicker(elapsed, float(index) * 2.7)
 
 func _queue_flight_redraw() -> void:
 	flight_redraw_pending = true
@@ -670,7 +715,8 @@ func _redraw_flight() -> void:
 		_redraw_ship_visual(visual, pose, _ship_local(parked), false)
 		_set_engine_lighting(visual, float(view_ship.engine_flame))
 	var player_screen := _fleet_screen_position(active_fleet_index, camera_anchor)
-	_redraw_ship_visual(player_visual, Transform2D(heading + PI / 2.0, zoom, 0.0, player_screen), ship_position, glowing_ships.has(-1))
+	_update_player_shield_glow(glowing_ships.has(-1))
+	_redraw_ship_visual(player_visual, Transform2D(heading + PI / 2.0, zoom, 0.0, player_screen), ship_position, false)
 	_set_engine_lighting(player_visual, engine_flame * (1.0 + 0.5 * engine_overdrive))
 	var parallax := smoothstep(MAP_LABEL_ZOOM, STAR_PARALLAX_FULL_ZOOM, camera_zoom)
 	starfield_offset += (camera_center - starfield_camera_center) * parallax * 0.001
@@ -751,8 +797,9 @@ func _rebase_world(shift: Vector2) -> void:
 		fleet_colliders[ship_id].body.position = _ship_local(ship_registry.find(ship_id))
 	for enemy in enemies:
 		enemy.position -= shift
-		enemy.patrol_origin -= shift
-		enemy.patrol_destination -= shift
+		if enemy.has("patrol_origin"):
+			enemy.patrol_origin -= shift
+			enemy.patrol_destination -= shift
 	for asteroid in asteroids:
 		asteroid.position -= shift
 	for shot in projectiles:
@@ -776,8 +823,6 @@ func _rebase_world(shift: Vector2) -> void:
 	_clear_engine_trails(cached_engines)
 	for view: Dictionary in fleet_views.values():
 		_clear_engine_trails(view.engines)
-	for enemy in enemies:
-		_clear_engine_trails(enemy.get("engines", []))
 	solar_system.set_origin(galaxy_origin[0], galaxy_origin[1])
 
 func _clear_engine_trails(engines: Array) -> void:
@@ -823,7 +868,9 @@ func _process(_delta: float) -> void:
 	var presentation_delta := minf(real_delta, 0.1)
 	if not _simulation_menu_open():
 		if not is_instance_valid(fleet_dialog) or not fleet_dialog.visible:
-			var pan := Input.get_vector("camera_pan_left", "camera_pan_right", "camera_pan_up", "camera_pan_down")
+			var pan := Vector2(
+				KEY_BINDINGS.strength("camera_pan_right") - KEY_BINDINGS.strength("camera_pan_left"),
+				KEY_BINDINGS.strength("camera_pan_down") - KEY_BINDINGS.strength("camera_pan_up")).limit_length()
 			if pan != Vector2.ZERO:
 				_pan_camera(pan * CAMERA_PAN_SPEED * presentation_delta)
 				_queue_flight_redraw()
@@ -854,7 +901,7 @@ func _process(_delta: float) -> void:
 			_refresh_fleet_order_details()
 	if order_status_label.visible and order_target_request.is_empty() and now >= order_notice_until_usec:
 		order_status_label.hide()
-	if flight_redraw_pending:
+	if flight_redraw_pending and not is_instance_valid(hangar_layer):
 		if simulation_clock.paused and not _simulation_menu_open():
 			_maybe_rebase_world()
 		flight_redraw_pending = false
@@ -884,13 +931,16 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "quality", graphics_quality)
 	config.set_value("graphics", "frame_cap", frame_cap)
 	config.set_value("graphics", "vsync", vsync_enabled)
-	for action in KEY_BINDINGS.ACTIONS:
-		var events := InputMap.action_get_events(action)
-		if not events.is_empty():
-			config.set_value("key_bindings", action, events[0].keycode)
+	KEY_BINDINGS.save(config)
 	config.set_value("audio", "engine_volume", engine_audio.volume)
 	if config.save(graphics_settings_path) != OK:
 		push_warning("Settings could not be saved; they will apply for this session.")
+
+func _refresh_debug_shortcut() -> void:
+	if is_instance_valid(debug_shortcut_button):
+		var caption := "Test flight" if debug_sandbox else "Debug"
+		var shortcut := KEY_BINDINGS.label("flight_debug")
+		debug_shortcut_button.text = caption if shortcut == "Unbound" else "%s · %s" % [caption, shortcut]
 
 func _create_top_controls() -> void:
 	var layer := CanvasLayer.new()
@@ -905,7 +955,29 @@ func _create_top_controls() -> void:
 	layer.add_child(hyperjump_context_button)
 	_add_top_button(layer, "hangar", -114, -72, "Ship Builder — design and launch ships.", _open_hangar)
 	_add_top_button(layer, "settings", -64, -22, "Settings — open the flight menu.", _open_settings)
+	if not debug_sandbox:
+		var jobs_button := Button.new()
+		jobs_button.text = "Jobs"
+		jobs_button.theme = FLEET_ORDER_PANEL.make_theme()
+		jobs_button.tooltip_text = "Galactic job board — accept contracts and track progress."
+		jobs_button.focus_mode = Control.FOCUS_NONE
+		jobs_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		jobs_button.offset_left = -236.0
+		jobs_button.offset_right = -174.0
+		jobs_button.offset_top = 22.0
+		jobs_button.offset_bottom = 64.0
+		jobs_button.pressed.connect(_open_jobs)
+		layer.add_child(jobs_button)
 	_create_simulation_controls(layer)
+	if OS.is_debug_build():
+		var button := Button.new()
+		debug_shortcut_button = button
+		_refresh_debug_shortcut()
+		button.theme = FLEET_ORDER_PANEL.make_theme()
+		button.focus_mode = Control.FOCUS_NONE
+		button.position = Vector2(22, 236)
+		button.pressed.connect(_toggle_debug_menu)
+		layer.add_child(button)
 	order_status_label = Label.new()
 	order_status_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	order_status_label.offset_left = -550.0
@@ -921,8 +993,8 @@ func _create_top_controls() -> void:
 func _create_simulation_controls(layer: CanvasLayer) -> void:
 	simulation_rate_control = OptionButton.new()
 	simulation_rate_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	simulation_rate_control.offset_left = -255.0
-	simulation_rate_control.offset_right = -176.0
+	simulation_rate_control.offset_left = -255.0 if debug_sandbox else -327.0
+	simulation_rate_control.offset_right = -176.0 if debug_sandbox else -248.0
 	simulation_rate_control.offset_top = 22.0
 	simulation_rate_control.offset_bottom = 64.0
 	simulation_rate_control.focus_mode = Control.FOCUS_NONE
@@ -936,8 +1008,8 @@ func _create_simulation_controls(layer: CanvasLayer) -> void:
 
 	simulation_calendar = Label.new()
 	simulation_calendar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	simulation_calendar.offset_left = -540.0
-	simulation_calendar.offset_right = -267.0
+	simulation_calendar.offset_left = -540.0 if debug_sandbox else -612.0
+	simulation_calendar.offset_right = -267.0 if debug_sandbox else -339.0
 	simulation_calendar.offset_top = 22.0
 	simulation_calendar.offset_bottom = 64.0
 	simulation_calendar.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -974,7 +1046,40 @@ func _set_simulation_rate(rate: int) -> void:
 	_sync_simulation_driver()
 
 func _simulation_menu_open() -> bool:
-	return is_instance_valid(settings_layer) or is_instance_valid(hangar_layer)
+	return _jobs_open() or is_instance_valid(settings_layer) or is_instance_valid(hangar_layer) or (is_instance_valid(debug_menu) and debug_menu.visible)
+
+func _jobs_open() -> bool:
+	return is_instance_valid(jobs_menu) and jobs_menu.visible
+
+func _open_jobs() -> void:
+	if not game_started or debug_sandbox or _simulation_menu_open() or (is_instance_valid(fleet_dialog) and fleet_dialog.visible):
+		return
+	_close_hyperjump_chart()
+	_cancel_order_target()
+	firing = false
+	rts_dragging = false
+	radial_menu_open = false
+	camera_dragging = false
+	engine_audio.silence()
+	heritage_gun_audio.stop()
+	set_process_unhandled_input(false)
+	if missions.board.round_number == 0:
+		missions.refresh()
+	if not is_instance_valid(jobs_menu):
+		jobs_menu = JOB_BOARD_MENU.new()
+		jobs_menu.world = missions
+		jobs_menu.closed.connect(_close_jobs)
+		add_child(jobs_menu)
+	else:
+		jobs_menu.show()
+		jobs_menu.redraw()
+	_sync_simulation_driver()
+
+func _close_jobs() -> void:
+	jobs_menu.hide()
+	_sync_simulation_driver()
+	set_process_unhandled_input(true)
+	_queue_flight_redraw()
 
 func _sync_simulation_driver() -> void:
 	var running := game_started and not simulation_clock.paused and not _simulation_menu_open()
@@ -1011,6 +1116,167 @@ func _add_top_button(layer: CanvasLayer, label: String, left: float, right: floa
 	button.pressed.connect(action)
 	layer.add_child(button)
 	return button
+
+func _toggle_debug_menu() -> void:
+	if not OS.is_debug_build() or not game_started or is_instance_valid(settings_layer) or is_instance_valid(hangar_layer) \
+		or (is_instance_valid(fleet_dialog) and fleet_dialog.visible):
+		return
+	if not debug_sandbox:
+		_launch_debug_flight(1.0)
+		return
+	if is_instance_valid(debug_menu) and debug_menu.visible:
+		debug_menu.hide()
+		return
+	if not is_instance_valid(debug_menu):
+		debug_menu = DEBUG_MENU.new()
+		debug_menu.hide()
+		debug_menu.game = self
+		add_child(debug_menu)
+		debug_menu.visibility_changed.connect(_debug_visibility_changed)
+	_cancel_order_target()
+	_close_hyperjump_chart()
+	camera_dragging = false
+	rts_dragging = false
+	radial_menu_open = false
+	firing = false
+	engine_audio.silence()
+	if is_instance_valid(heritage_gun_audio):
+		heritage_gun_audio.stop()
+	debug_menu.open_panel()
+
+func _debug_visibility_changed() -> void:
+	_sync_simulation_driver()
+	set_process_unhandled_input(not debug_menu.visible)
+	_queue_flight_redraw()
+
+func _launch_debug_flight(spacing: float) -> void:
+	if not OS.is_debug_build() or not game_started or not is_finite(spacing) or debug_switch_pending:
+		return
+	debug_switch_pending = true
+	var source := solar_system.galaxy
+	var next = load("res://main.tscn").instantiate()
+	next.debug_sandbox = true
+	next.debug_campaign = debug_campaign if debug_sandbox else self
+	next.debug_spacing = clampf(spacing, DEBUG_TUNING.MIN_SPACING, DEBUG_TUNING.MAX_SPACING)
+	next.debug_boot = {"seed": galaxy_seed, "count": solar_system.systems.size(), "version": source.generator_version,
+		"arms": source.get("spiral", {}).get("arms", GALAXY.DEFAULT_ARMS), "parts": custom_parts.duplicate(true),
+		"admin": fleet[active_fleet_index].admin.duplicate(true), "name": fleet[active_fleet_index].name}
+	if debug_sandbox:
+		next.debug_campaign_designs = debug_campaign_designs
+		next.debug_tuning.factors = debug_tuning.factors.duplicate()
+		next.debug_tuning.blocks = debug_tuning.blocks.duplicate(true)
+		next.debug_tuning.invulnerable = debug_tuning.invulnerable
+		next.debug_tuning.waves = debug_tuning.waves
+	else:
+		for index in fleet.size():
+			if index == active_fleet_index:
+				continue
+			var ship: Dictionary = fleet[index]
+			next.debug_campaign_designs.append({"name": ship.name, "label": "Campaign · " + ship.name,
+				"id": "campaign/" + ship.id, "parts": ship.parts.duplicate(true), "admin": ship.admin.duplicate(true)})
+	_swap_debug_scene.call_deferred(next)
+
+func _swap_debug_scene(next: Node2D) -> void:
+	var tree := get_tree()
+	var scene_parent := get_parent()
+	if debug_sandbox:
+		if is_instance_valid(debug_menu):
+			debug_menu.hide()
+		tree.current_scene = null
+		scene_parent.remove_child(self)
+		queue_free()
+	else:
+		_suspend_campaign_for_debug()
+	scene_parent.add_child(next)
+	tree.current_scene = next
+
+func _suspend_campaign_for_debug() -> void:
+	debug_previous_process_mode = process_mode
+	process_mode = PROCESS_MODE_DISABLED
+	set_physics_process(false)
+	engine_audio.silence()
+	heritage_gun_audio.stop()
+	hide()
+	for child in get_children():
+		if child is CanvasLayer and child.visible and not child.is_queued_for_deletion():
+			debug_hidden_layers.append(child)
+			child.hide()
+
+func _exit_debug_flight() -> void:
+	if debug_switch_pending:
+		return
+	debug_switch_pending = true
+	_restore_debug_campaign.call_deferred()
+
+func _restore_debug_campaign() -> void:
+	var tree := get_tree()
+	if not is_instance_valid(debug_campaign):
+		tree.reload_current_scene()
+		return
+	if is_instance_valid(debug_menu):
+		debug_menu.hide()
+	tree.current_scene = null
+	get_parent().remove_child(self)
+	tree.current_scene = debug_campaign
+	debug_campaign._resume_campaign_from_debug()
+	queue_free()
+
+func _resume_campaign_from_debug() -> void:
+	debug_switch_pending = false
+	show()
+	for layer in debug_hidden_layers:
+		if is_instance_valid(layer):
+			layer.show()
+	debug_hidden_layers.clear()
+	last_render_usec = Time.get_ticks_usec()
+	process_mode = debug_previous_process_mode
+	_sync_simulation_driver()
+	_queue_flight_redraw()
+
+func _start_debug_flight() -> void:
+	var boot := debug_boot
+	debug_boot = {}
+	var galaxy := DEBUG_TUNING.scaled_map(GALAXY.create_map(boot.seed, boot.count, boot.version, boot.arms), debug_spacing)
+	var origin: Vector2 = galaxy.systems[0].center
+	var offset := GALAXY.starter_offset(int(boot.version))
+	var spawn := (origin + offset).clamp(Vector2.ZERO, galaxy.world_size)
+	var stats := _stats_with_admin(boot.parts, boot.admin)
+	_start_flight(galaxy, {}, {"active_ship": 0, "world_origin": spawn, "fleet": [
+		{"name": boot.name, "parts": boot.parts, "admin": boot.admin, "position": Vector2.ZERO, "heading": heading,
+			"hull": stats.health, "shield": stats.shield, "shield_delay": 0.0},
+	]})
+	fleet[0].galaxy_position = SHIP_STATE.absolute(galaxy_origin, ship_position)
+	_toggle_debug_menu()
+
+func _debug_refresh_tuning() -> void:
+	solar_system.set_orbit_rates(elapsed, debug_tuning.factor("planet"), debug_tuning.factor("moon"))
+	for ship in fleet:
+		_prepare_fleet_stats(ship)
+		ship.hull = minf(ship.hull, ship.fleet_stats.health)
+		ship.shield = minf(ship.shield, ship.fleet_stats.shield)
+	cached_ship_stats = fleet[active_fleet_index].fleet_stats
+	player_hull = minf(player_hull, cached_ship_stats.health)
+	player_shield = minf(player_shield, cached_ship_stats.shield)
+	_queue_flight_redraw()
+
+func _debug_set_velocity(speed_km: float, turn_degrees: float) -> void:
+	var ship: Dictionary = fleet[active_fleet_index]
+	SHIP_ORDER_QUEUE.cancel(ship)
+	ship.navigation = {"mode": "idle"}
+	_apply_active_order_navigation(ship)
+	fleet_detours.erase(ship.id)
+	velocity = Vector2.from_angle(heading) * speed_km * DISPLAY_KM_SPEED_UNIT
+	angular_velocity = deg_to_rad(turn_degrees)
+	ship_motion_remainder = Vector2.ZERO
+	_commit_active_ship_state()
+	_queue_flight_redraw()
+
+func _debug_refill() -> void:
+	player_hull = _player_max_hull()
+	player_shield = _player_max_shield()
+	player_shield_delay = 0.0
+	_commit_active_ship_state()
+	_queue_flight_redraw()
 
 func _open_fleet() -> void:
 	if is_instance_valid(hangar_layer) or is_instance_valid(settings_layer):
@@ -1115,9 +1381,10 @@ func _selected_ship_cargo() -> Dictionary:
 	var index := selected_fleet[0]
 	var ship: Dictionary = fleet[index]
 	var active := index == active_fleet_index
-	var cargo: Dictionary = {"iron": iron, "tritium": tritium} if active else ship.cargo
+	var cargo: Dictionary = _flight_cargo() if active else ship.cargo
 	var profile: Dictionary = _custom_stats() if active else ship.fleet_stats
-	return {"name": ship.name, "iron": cargo.iron, "tritium": cargo.tritium, "capacity": profile.cargo_capacity}
+	return {"name": ship.name, "iron": cargo.iron, "tritium": cargo.tritium, "capacity": profile.cargo_capacity,
+		"contracts": int(cargo.get("contracts", 0))}
 
 func _fleet_panel_selection() -> int:
 	var selected := fleet_list.get_selected_items()
@@ -1140,7 +1407,7 @@ func _refresh_fleet_list() -> void:
 func _refresh_fleet_order_details() -> void:
 	var index := _fleet_panel_selection()
 	var ship: Dictionary = fleet[index]
-	var cargo: Dictionary = {"iron": iron, "tritium": tritium} if index == active_fleet_index else ship.cargo
+	var cargo: Dictionary = _flight_cargo() if index == active_fleet_index else ship.cargo
 	fleet_orders.show_ship(ship, cargo, int(ship.fleet_stats.cargo_capacity))
 	fleet_detail_refresh_usec = Time.get_ticks_usec() + 200000
 
@@ -1152,7 +1419,7 @@ func _fleet_panel_order(type: String, parameter: float, repeat: bool, append: bo
 		rts_dragging = false
 		firing = false
 		fleet_dialog.hide()
-		_show_order_notice("Right-click a destination for %s · Esc to cancel." % ship.name)
+		_show_order_notice("%s a destination for %s · %s to cancel." % [KEY_BINDINGS.label("flight_order"), ship.name, KEY_BINDINGS.label("game_back")])
 		return
 	var target: Variant = int(parameter) if type == "hyperjump" else null
 	if type == "mine":
@@ -1355,6 +1622,7 @@ func _extract_ore(id: String, requested: int) -> int:
 	var extracted := clampi(requested, 0, rock.iron)
 	rock.iron -= extracted
 	depleted_ore[id] = rock.iron
+	missions.record_mining(id, extracted)
 	return extracted
 
 func _extract_order_ore(ship: Dictionary, id: String, requested: int) -> int:
@@ -1455,17 +1723,20 @@ func _load_active_ship_state(ship: Dictionary) -> void:
 		"decelerate":
 			boost_decelerating = true
 
-func _draw_parked_ship(canvas: CanvasItem, ship: Dictionary) -> void:
+func _draw_parked_ship(canvas: CanvasItem, ship: Dictionary, tiled_hull: ArrayMesh) -> void:
 	var parts: Array = ship.parts
 	var center: Vector2 = MODULES.bounds(parts).get_center()
 	var ship_scale: float = ship.get("ship_scale", 1.0)
 	var borders: Dictionary = MODULES.armour_borders(parts)
+	var glass := MODULES.window_render_context(parts)
 	var cell_size := MODULES.cell_size_for(parts[0]) if not parts.is_empty() else MODULES.CELL
 	var origin := Vector2.ONE * (cell_size - MODULES.CELL) * 0.5
+	if tiled_hull != null:
+		canvas.draw_mesh(tiled_hull, MODULES.HULL_TEXTURES.retro_plain)
 	for index in range(parts.size()):
 		var part: Dictionary = parts[index]
-		if MODULES.is_exterior_structure(part):
-			MODULES.draw_part(canvas, part, (MODULES.part_position(part) - center) * ship_scale, ship_scale)
+		if MODULES.is_exterior_structure(part) and part.type not in MODULES.TILED_HULL_TYPES:
+			MODULES.draw_part(canvas, part, (MODULES.part_position(part) - center) * ship_scale, ship_scale, 1.0, Color.WHITE, 1.0, false, glass)
 			if borders.has(index):
 				MODULES.draw_armour_border(canvas, borders[index], (origin - center) * ship_scale, cell_size * ship_scale)
 	for index in borders:
@@ -1476,12 +1747,13 @@ func _draw_parked_ship(canvas: CanvasItem, ship: Dictionary) -> void:
 	for part in parts:
 		if MODULES.is_decoration(part):
 			MODULES.draw_part(canvas, part, (MODULES.part_position(part) - center) * ship_scale, ship_scale)
+	for part: Dictionary in parts:
 		if part.has("turret"):
 			MODULES.draw_mounted_turret(canvas, part.turret, (MODULES.mount_position(part) - center) * ship_scale, ship_scale)
 
 func _draw_fleet_exhaust(canvas: CanvasItem, view: Dictionary) -> void:
 	for index in range(view.engines.size()):
-		_draw_engine_flare(canvas, view.engines[index], float(view.engine_flame), float(index) * 2.7)
+		_draw_short_bell(canvas, view.engines[index], float(view.engine_flame), float(index) * 2.7)
 
 func _draw_empty_fleet_layer(_canvas: CanvasItem) -> void:
 	pass
@@ -1521,10 +1793,11 @@ func _create_fleet_view(ship: Dictionary) -> void:
 	for part in ship.parts:
 		_collect_engine_nozzles(part, bounds.get_center(), fleet_engines, ship_scale)
 	var view := {"engines": fleet_engines, "engine_flame": 0.0}
-	var visual := _add_ship_visual(fleet_visuals, _draw_fleet_exhaust.bind(view), _draw_parked_ship.bind(ship), _draw_empty_fleet_layer, _draw_empty_fleet_layer)
+	var tiled_hull := MODULES.tiled_hull_mesh(ship.parts, bounds.get_center(), ship_scale)
+	var visual := _add_ship_visual(fleet_visuals, _draw_fleet_exhaust.bind(view), _draw_parked_ship.bind(ship, tiled_hull), _draw_empty_fleet_layer, _draw_empty_fleet_layer)
 	SHIP_RELIEF.bake(visual.material, ship.parts, bounds, ship_scale)
 	for engine in fleet_engines:
-		_add_engine_light(visual, engine.nozzle, engine.effect_scale)
+		_add_engine_light(visual, engine)
 	view.visual = visual
 	fleet_views[ship.id] = view
 	visual.queue_redraw()
@@ -1548,11 +1821,11 @@ func _add_fleet_collision_shapes(body: PhysicsBody2D, parts: Array, bounds: Rect
 	return shapes
 
 func _fleet_hull_shapes(parts: Array, bounds: Rect2, ship_scale: float) -> Array[PackedVector2Array]:
-	var shapes: Array[PackedVector2Array] = []
 	var center := bounds.get_center()
+	var shapes := MODULES.merged_square_hull(parts, center, ship_scale)
 	var scale_transform := Transform2D(0.0, Vector2.ONE * ship_scale, 0.0, Vector2.ZERO)
 	for part in parts:
-		if not MODULES.is_exterior_structure(part):
+		if not MODULES.is_exterior_structure(part) or part.type in MODULES.MERGEABLE_HULL_TYPES:
 			continue
 		var offset := MODULES.part_position(part) - center
 		var polygons: Array[PackedVector2Array] = []
@@ -1622,6 +1895,7 @@ func _switch_fleet_control(index: int) -> void:
 		return
 	_save_active_fleet_ship()
 	active_fleet_index = index
+	debug_tuning.reset_samples()
 	_select_fleet_ship(index)
 	var ship: Dictionary = fleet[active_fleet_index]
 	_remove_fleet_view(ship.id)
@@ -1697,7 +1971,7 @@ func _set_sustained_boost(enabled: bool, direction := Vector2.ZERO) -> void:
 	_queue_flight_redraw()
 
 func _fleet_command_selection() -> Array[int]:
-	return selected_fleet.duplicate() if not selected_fleet.is_empty() else [active_fleet_index]
+	return selected_fleet.duplicate()
 
 func _can_fleet_boost(index: int) -> bool:
 	var ship: Dictionary = fleet[index]
@@ -1705,7 +1979,7 @@ func _can_fleet_boost(index: int) -> bool:
 	return not jumping and ship.can_fly and float(ship.fleet_stats.boost) > 0.0
 
 func _toggle_sustained_boost() -> void:
-	if hyperjump_time >= 0.0:
+	if selected_fleet.is_empty() or hyperjump_time >= 0.0:
 		return
 	var enable := not sustained_boost_enabled
 	if enable and not _can_fleet_boost(active_fleet_index):
@@ -1831,7 +2105,7 @@ func _show_hyperjump_context(destination: int, screen_position: Vector2) -> void
 	var count := _fleet_jump_candidates(destination).size()
 	hyperjump_context_button.text = "Hyperjump %d Ships" % count if count > 1 else "Initiate Hyper Jump"
 	hyperjump_context_button.disabled = count == 0
-	hyperjump_context_button.tooltip_text = "Travel to %s" % solar_system.systems[destination].name if count > 0 else "Choose another system with a flight-capable ship."
+	hyperjump_context_button.tooltip_text = "Travel to %s" % solar_system.systems[destination].name if count > 0 else "Select a flight-capable ship and choose another system."
 	var button_size := Vector2(190, 40)
 	hyperjump_context_button.position = screen_position.clamp(Vector2.ZERO, (get_viewport_rect().size - button_size).max(Vector2.ZERO))
 	hyperjump_context_button.size = button_size
@@ -1913,6 +2187,22 @@ func _execute_hyperjump(source: int, destination: int) -> void:
 	_clear_combat_control()
 	_queue_flight_redraw()
 
+func _cancel_hyperjump() -> void:
+	if hyperjump_time < 0.0 or not selected_fleet.has(active_fleet_index):
+		return
+	var ship: Dictionary = fleet[active_fleet_index]
+	if not ship.orders.is_empty():
+		_cancel_fleet_orders(active_fleet_index)
+	else:
+		ship.navigation = {"mode": "hold"}
+		hyperjump_time = -1.0
+	# Drop out at the current position rather than carrying jump speed into normal flight.
+	velocity = Vector2.ZERO
+	thrust = 0.0
+	hyperjump_arrival_until = 0.0
+	_commit_active_ship_state()
+	_queue_flight_redraw()
+
 func _hyperjump_cruise_speed() -> float:
 	return float(_current_ship().hyperdrive)
 
@@ -1952,7 +2242,7 @@ func _open_settings() -> void:
 	if game_started:
 		_close_hyperjump_chart()
 	else:
-		home_menu.set_process_unhandled_input(false)
+		home_menu.set_process_input(false)
 	engine_audio.silence()
 	heritage_gun_audio.stop()
 	set_process_unhandled_input(false)
@@ -1962,6 +2252,7 @@ func _open_settings() -> void:
 	_sync_simulation_driver()
 	var menu := SETTINGS_MENU.new()
 	menu.in_flight = game_started
+	menu.test_flight = debug_sandbox
 	if game_started:
 		_set_camera_zoom(camera_zoom)
 		menu.initial_zoom = camera_zoom
@@ -1973,7 +2264,11 @@ func _open_settings() -> void:
 	menu.initial_vsync = vsync_enabled
 	menu.initial_engine_volume = engine_audio.volume
 	settings_layer.add_child(menu)
-	menu.key_binding_changed.connect(func(): _save_graphics_settings())
+	menu.key_binding_changed.connect(func():
+		_save_graphics_settings()
+		_refresh_debug_shortcut()
+		_queue_flight_redraw()
+	)
 	menu.engine_volume_changed.connect(func(value: float):
 		engine_audio.volume = value
 		_save_graphics_settings()
@@ -2011,7 +2306,7 @@ func _close_settings() -> void:
 		_sync_simulation_driver()
 		set_process_unhandled_input(true)
 	else:
-		home_menu.set_process_unhandled_input(true)
+		home_menu.set_process_input(true)
 		home_menu.focus_settings()
 
 func _open_hangar() -> void:
@@ -2041,9 +2336,13 @@ func _create_ship_editor(parts: Array, close_caption: String, launch: Callable) 
 	hangar_layer = CanvasLayer.new()
 	hangar_layer.layer = 20
 	add_child(hangar_layer)
+	# The editor and library are opaque. Don't submit the suspended flight scene behind them.
+	if is_instance_valid(world_background):
+		world_background.hide()
 	_sync_simulation_driver()
 	var hangar := HANGAR.new()
 	hangar.current_parts = parts.duplicate(true)
+	hangar.library_read_only = debug_sandbox
 	hangar.close_caption = close_caption
 	hangar.speed_unit = DISPLAY_KM_SPEED_UNIT
 	hangar.performance_profile = func(design: Array): return _stats_with_admin(design, {})
@@ -2056,10 +2355,13 @@ func _close_hangar(restore_home := true) -> void:
 		return
 	hangar_layer.queue_free()
 	hangar_layer = null
+	if is_instance_valid(world_background):
+		world_background.show()
+		_queue_flight_redraw()
 	_sync_simulation_driver()
 	set_process_unhandled_input(game_started)
 	if restore_home and not game_started and is_instance_valid(home_menu):
-		home_menu.set_process_unhandled_input(true)
+		home_menu.set_process_input(true)
 		home_menu._show_setup()
 
 func _deploy_custom_ship(parts: Array, use_type_default := true) -> void:
@@ -2072,13 +2374,15 @@ func _deploy_custom_ship(parts: Array, use_type_default := true) -> void:
 	turret_angles.clear()
 	player_machine_gun_shots.clear()
 	player_rocket_launches.clear()
-	var file := FileAccess.open("user://custom_ship.json", FileAccess.WRITE)
-	if file == null and OS.has_feature("editor"):
-		file = FileAccess.open("res://custom_ship.json", FileAccess.WRITE)
-	if file != null:
-		file.store_string(JSON.stringify(custom_parts))
-	else:
-		push_warning("Custom ship could not be saved to disk; it remains available for this session.")
+	if not debug_sandbox:
+		var file := FileAccess.open("user://custom_ship.json", FileAccess.WRITE)
+		if file == null and OS.has_feature("editor"):
+			file = FileAccess.open("res://custom_ship.json", FileAccess.WRITE)
+		if file != null:
+			file.store_string(JSON.stringify(custom_parts))
+		else:
+			push_warning("Custom ship could not be saved to disk; it remains available for this session.")
+	debug_tuning.reset_samples()
 	# A newly launched design starts with its own full hull and shield.
 	player_hull = _player_max_hull()
 	player_shield = _player_max_shield()
@@ -2125,12 +2429,17 @@ func _ensure_ship_cache() -> void:
 	_add_fleet_collision_shapes(player_fleet_body, custom_parts, cached_ship_bounds, cached_ship_scale)
 	cached_hull_shapes.clear()
 	cached_armour_borders = MODULES.armour_borders(custom_parts)
+	cached_window_context = MODULES.window_render_context(custom_parts)
+	cached_ship_decorations = custom_parts.filter(MODULES.is_decoration)
+	cached_tiled_hull = MODULES.tiled_hull_mesh(custom_parts, center, cached_ship_scale)
 	var uses_shaped_hull := custom_parts.any(func(part: Dictionary) -> bool:
-		return MODULES.is_exterior_structure(part) and (part.get("fine_grid", false) or part.type in ["wedge_half", "armor_wedge"] or MODULES.footprint(part).size != Vector2i.ONE)
+		return MODULES.is_exterior_structure(part) and (part.get("fine_grid", false) or part.type in ["wedge_half", "armor_wedge"] or MODULES.is_circle_hull(part.type) or MODULES.footprint(part).size != Vector2i.ONE)
 	)
+	if uses_shaped_hull:
+		cached_hull_shapes.append_array(MODULES.merged_square_hull(custom_parts, center, cached_ship_scale))
 	for part in custom_parts:
 		_collect_engine_nozzles(part, center, cached_engines, cached_ship_scale)
-		if uses_shaped_hull and MODULES.is_exterior_structure(part):
+		if uses_shaped_hull and MODULES.is_exterior_structure(part) and part.type not in MODULES.MERGEABLE_HULL_TYPES:
 			cached_hull_shapes.append_array(MODULES.material_polygons(part, (MODULES.part_position(part) - center) * cached_ship_scale, MODULES.cell_size_for(part) * cached_ship_scale))
 	var slots: Array = cached_ship_stats.slots
 	for index in slots.size():
@@ -2138,9 +2447,9 @@ func _ensure_ship_cache() -> void:
 		if slot.type not in SHIP_CAPABILITIES.SLOT_WEAPONS:
 			continue
 		cached_turret_mounts.append({"x": 0, "y": 0, "slot_index": index, "turret": slot.type,
-			"local_position": LOADOUT.local_position(slot, cached_ship_bounds, cached_ship_scale)})
+			"visual_type": slot.get("visual_type", slot.type), "local_position": LOADOUT.local_position(slot, cached_ship_bounds, cached_ship_scale)})
 	for engine in cached_engines:
-		_add_engine_light(player_visual, engine.nozzle, engine.effect_scale)
+		_add_engine_light(player_visual, engine)
 	ship_cache_ready = true
 
 func _collect_engine_nozzles(part: Dictionary, center: Vector2, engines: Array, ship_scale: float = 1.0) -> void:
@@ -2184,6 +2493,7 @@ func _collect_engine_nozzles(part: Dictionary, center: Vector2, engines: Array, 
 		nozzle.origin *= ship_scale
 		engine.nozzle = nozzle
 		engine.size *= ship_scale
+		engine.bell_size = SHORT_BELL.base_size(engine.size, MODULES.PRESET_TEXTURES.has(part.type))
 		engine.effect_scale = ship_scale
 
 func _add_pixel_engine_nozzles(image: Image, origin: Vector2, fit: float, engines: Array) -> void:
@@ -2214,13 +2524,21 @@ func _custom_stats() -> Dictionary:
 	return cached_ship_stats
 
 func _stats_with_admin(parts: Array, admin: Dictionary) -> Dictionary:
-	return SHIP_CAPABILITIES.build(parts, admin, {"speed": top_speed, "acceleration": acceleration, "turn": turn_speed,
-		"boost": BOOST_TRAVEL_SPEED, "hyperdrive": HYPERJUMP_TRAVEL_SPEED, "speed_unit": DISPLAY_KM_SPEED_UNIT})
+	var stats := SHIP_CAPABILITIES.build(parts, admin, {"speed": top_speed, "acceleration": acceleration, "turn": turn_speed,
+		"boost": BOOST_TRAVEL_SPEED, "hyperdrive": HYPERJUMP_TRAVEL_SPEED, "speed_unit": DISPLAY_KM_SPEED_UNIT}, debug_tuning.blocks)
+	if debug_sandbox:
+		for keys in [["speed", "normal_speed"], ["acceleration", "travel_acceleration"], ["maneuver", "turn_rate"]]:
+			var factor := debug_tuning.factor("turn" if keys[0] == "maneuver" else keys[0])
+			stats[keys[1]] *= factor
+			stats[keys[0]] *= factor
+		stats.boost *= debug_tuning.factor("boost")
+		stats.hyperdrive *= debug_tuning.factor("hyperdrive")
+	return stats
 
 func _ship_capabilities(index: int) -> Dictionary:
 	var ship: Dictionary = fleet[index]
 	var profile := (_custom_stats() if index == active_fleet_index else ship.fleet_stats as Dictionary).duplicate()
-	var cargo := {"iron": iron, "tritium": tritium} if index == active_fleet_index else ship.cargo as Dictionary
+	var cargo := _flight_cargo() if index == active_fleet_index else ship.cargo as Dictionary
 	profile.available_cargo_space = SHIP_CAPABILITIES.available_space(profile, cargo)
 	return profile
 
@@ -2328,8 +2646,12 @@ func _player_max_hull() -> float:
 func _player_max_shield() -> float:
 	return _custom_stats().shield
 
+func _flight_cargo() -> Dictionary:
+	var reserved := int(fleet[active_fleet_index].cargo.get("contracts", 0)) if not fleet.is_empty() else 0
+	return {"iron": iron, "tritium": tritium, "contracts": reserved}
+
 func _cargo_available() -> bool:
-	return SHIP_CAPABILITIES.available_space(_custom_stats(), {"iron": iron, "tritium": tritium}) > 0
+	return SHIP_CAPABILITIES.available_space(_custom_stats(), _flight_cargo()) > 0
 
 func _ship_size() -> Vector2:
 	_ensure_ship_cache()
@@ -2338,44 +2660,54 @@ func _ship_size() -> Vector2:
 func _ship_half_length() -> float:
 	return _ship_size().y / 2.0
 
-func _spawn_enemy_wave() -> void:
-	wave_number += 1
+func _enemy_waves_enabled() -> bool:
+	return ENEMY_SHIPS_ENABLED or (debug_sandbox and debug_tuning.waves)
+
+func _debug_weapon_factor(kind: String) -> float:
+	return float(debug_tuning.blocks.get(kind, {}).get("weapon", 1.0))
+
+func _clear_enemies() -> void:
 	for visual in enemy_visuals.get_children():
 		enemy_visuals.remove_child(visual)
 		visual.queue_free()
 	enemies.clear()
 	selected_enemy = -1
+	enemy_wave_timer = -1.0
+	# Visuals bind indices: don't allow old hits to appear on newly spawned ships.
+	for impacts in [shield_impacts, hull_impacts]:
+		for index in range(impacts.size() - 1, -1, -1):
+			if impacts[index].enemy >= 0:
+				impacts.remove_at(index)
+
+func _generated_npc_layout(parts: Array, bounds: Rect2, scale_factor: float, armed := true) -> Dictionary:
+	var exterior: Array[Dictionary] = []
+	var turrets: Array[Dictionary] = []
+	var engines: Array[Dictionary] = []
+	var center := bounds.get_center()
+	for part: Dictionary in parts:
+		if MODULES.is_exterior_structure(part):
+			exterior.append({"part": part, "offset": (MODULES.part_position(part) - center) * scale_factor})
+		if armed and part.get("turret", "") in MODULES.TURRETS and part.turret != "miner":
+			turrets.append({"part": part, "offset": (MODULES.mount_position(part) - center) * scale_factor})
+		_collect_engine_nozzles(part, center, engines, scale_factor)
+	return {"exterior": exterior, "turrets": turrets, "engines": engines,
+		"glass": MODULES.window_render_context(parts), "hull_shapes": _fleet_hull_shapes(parts, bounds, scale_factor)}
+
+func _spawn_enemy_wave() -> void:
+	wave_number += 1
+	_clear_enemies()
 	var enemy_count := mini(2 + wave_number, 12)
 	var health_multiplier := 1.0 + 0.12 * float(wave_number - 1)
 	var shield_multiplier := 1.0 + 0.08 * float(wave_number - 1)
 	var fire_interval := maxf(0.65, 1.0 - 0.035 * float(wave_number - 1))
 	var enemy_speed := ENEMY_SPEED * minf(1.35, 1.0 + 0.025 * float(wave_number - 1))
 	for i in range(enemy_count):
-		var design := MODULES.generate_random_design(rng, true)
+		var roll := SHIP_RANDOMIZER.generate(rng, rng.randi_range(0, 1 if wave_number > 1 else 0), true)
+		var design: Array = roll.parts
 		var stats := MODULES.stats(design)
 		var bounds := MODULES.bounds(design)
-		var dimensions := bounds.size * ENEMY_PART_SCALE
+		var dimensions := bounds.size
 		var radius := dimensions.length() * 0.5
-		var center := bounds.get_center()
-		var exterior: Array[Dictionary] = []
-		var turrets: Array[Dictionary] = []
-		var engines: Array[Dictionary] = []
-		for part in design:
-			if not MODULES.is_exterior_structure(part):
-				continue
-			var offset := (Vector2(part.x, part.y) * MODULES.CELL - center) * ENEMY_PART_SCALE
-			var module := {"part": part, "offset": offset}
-			exterior.append(module)
-			if part.has("turret"):
-				turrets.append(module)
-			if part.type in MODULES.MAIN_ENGINE_TYPES:
-				var angle := float(int(part.rotation)) * PI / 2.0
-				for outlet in MODULES.engine_nozzles(part, offset, ENEMY_PART_SCALE):
-					engines.append({
-						"nozzle": Transform2D(angle, outlet.position),
-						"size": Vector2(outlet.width, 0.60),
-						"phase": offset.x,
-					})
 		var max_health := clampf(float(stats.health) / 5.0, 80.0, 140.0) * health_multiplier
 		var max_shield := float(stats.shield) * (70.0 / 60.0) * shield_multiplier
 		var margin := maxf(35.0, radius)
@@ -2401,15 +2733,123 @@ func _spawn_enemy_wave() -> void:
 			"shield_delay": 0.0, "fire_cooldown": rng.randf_range(0.2, 1.0), "fire_interval": fire_interval,
 			"speed": enemy_speed * clampf(float(stats.speed) / 0.85, 0.82, 1.18),
 			"avoid_side": 1.0 if i % 2 == 0 else -1.0, "alive": true,
-			"dimensions": dimensions, "radius": radius, "exterior": exterior, "turrets": turrets, "engines": engines, "next_turret": 0,
+			"dimensions": dimensions, "radius": radius, "ship_scale": 1.0, "name": "%s %s" % [roll.family, roll.class], "next_turret": 0,
 		}
-		enemies.append(enemy)
-		var visual := _add_ship_visual(enemy_visuals, _draw_enemy_exhaust.bind(enemy),
-			_draw_enemy_hull.bind(enemy, i), _draw_enemy_turrets.bind(enemy, i), _draw_enemy_effects.bind(enemy, i))
-		SHIP_RELIEF.bake(visual.material, design, bounds, ENEMY_PART_SCALE)
-		for engine in engines:
-			_add_engine_light(visual, engine.nozzle)
-	enemy_wave_timer = -1.0
+		enemy.merge(_generated_npc_layout(design, bounds, 1.0))
+		_add_enemy_visual(enemy, design, bounds, 1.0)
+
+func _add_enemy_visual(enemy: Dictionary, parts: Array, bounds: Rect2, ship_scale: float) -> void:
+	var index := enemies.size()
+	enemies.append(enemy)
+	var visual := _add_ship_visual(enemy_visuals, _draw_enemy_exhaust.bind(enemy),
+		_draw_enemy_hull.bind(enemy, index), _draw_enemy_turrets.bind(enemy, index), _draw_enemy_effects.bind(enemy, index))
+	SHIP_RELIEF.bake(visual.material, parts, bounds, ship_scale)
+	for engine in enemy.engines:
+		_add_engine_light(visual, engine)
+
+func _debug_enemy_designs() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	for index in fleet.size():
+		var ship: Dictionary = fleet[index]
+		entries.append({"name": ship.name, "label": "Fleet · %s%s" % [ship.name, " (active)" if index == active_fleet_index else ""],
+			"id": "fleet/" + ship.id, "parts": ship.parts, "admin": ship.admin})
+	entries.append_array(debug_campaign_designs)
+	var library: Variant = SHIP_LIBRARY.read()
+	if library is Dictionary:
+		var names: Array = library.keys()
+		names.sort()
+		for ship_name in names:
+			var parts := SHIP_LIBRARY.restore_design(library[ship_name])
+			if not parts.is_empty() and MODULES.validate(parts) == "":
+				entries.append({"name": str(ship_name), "label": "Library · " + str(ship_name), "id": "library/" + str(ship_name), "parts": parts})
+	for kind in MODULES.PRESET_LENGTHS_METERS:
+		var ship_name: String = MODULES.TYPES[kind].name
+		entries.append({"name": ship_name, "label": "Preset · " + ship_name, "id": "preset/" + kind, "parts": MODULES.preset_design(kind)})
+	return entries
+
+func _debug_spawn_enemy_design(design: Dictionary, count: int, distance: float, arm_unarmed: bool) -> int:
+	if not debug_sandbox or hyperjump_time >= 0.0 or not is_finite(distance):
+		return 0
+	var parts: Array = design.get("parts", [])
+	if parts.is_empty() or MODULES.validate(parts, false, false) != "":
+		return 0
+	count = mini(clampi(count, 1, 8), 24 - enemies.size())
+	if count <= 0:
+		return 0
+	var stats := _stats_with_admin(parts, design.get("admin", {}))
+	var bounds := MODULES.bounds(parts)
+	var center := bounds.get_center()
+	var scale_factor := MODULES.length_scale(bounds.size.y / MODULES.WORLD_UNITS_PER_METER, design.get("admin", {}))
+	var dimensions := bounds.size * scale_factor
+	var radius := dimensions.length() * 0.5
+	var exterior: Array[Dictionary] = []
+	var turrets: Array[Dictionary] = []
+	var engines: Array[Dictionary] = []
+	var decorations: Array[Dictionary] = []
+	for part: Dictionary in parts:
+		var offset := (MODULES.part_position(part) - center) * scale_factor
+		if MODULES.is_decoration(part):
+			decorations.append({"part": part, "offset": offset})
+		elif MODULES.is_exterior_structure(part) or MODULES.is_armour_overlay(part):
+			exterior.append({"part": part, "offset": offset})
+		_collect_engine_nozzles(part, center, engines, scale_factor)
+		if not parts[0].get("fine_grid", false) and not design.get("admin", {}).has("module_slots") and part.get("turret", "") in MODULES.TURRETS and part.turret != "miner":
+			turrets.append({"part": {"turret": part.turret}, "offset": (MODULES.mount_position(part) - center) * scale_factor})
+	for slot: Dictionary in stats.slots:
+		if slot.type in SHIP_CAPABILITIES.SLOT_WEAPONS and slot.type != "miner":
+			turrets.append({"part": {"turret": slot.get("visual_type", slot.type)}, "offset": LOADOUT.local_position(slot, bounds, scale_factor)})
+	if turrets.is_empty() and arm_unarmed:
+		turrets.append({"part": {"turret": "laser"}, "offset": Vector2(0.0, -dimensions.y * 0.15)})
+	var glass := MODULES.window_render_context(parts)
+	var shapes := _fleet_hull_shapes(parts, bounds, scale_factor)
+	var spawn_distance := maxf(clampf(distance, 100.0, 12000.0), radius + _ship_size().length() * 0.5 + 120.0)
+	var spawned := 0
+	for attempt in 78:
+		# Start in front of the pilot, then fan out and try wider rings if occupied.
+		var spoke := attempt % 13
+		var angle := float((spoke + 1) / 2) * TAU / 13.0 * (-1.0 if spoke % 2 == 0 else 1.0)
+		var candidate := ship_position + Vector2.from_angle(heading + angle) * (spawn_distance + floorf(attempt / 13.0) * (radius * 2.0 + 160.0))
+		if not _npc_spawn_clear(candidate, radius):
+			continue
+		var facing := candidate.angle_to_point(ship_position)
+		var health := maxf(1.0, stats.health)
+		var enemy := {"name": design.name, "position": candidate, "heading": facing, "aim_angle": facing, "velocity": Vector2.ZERO,
+			"angular_velocity": 0.0, "turn_speed": stats.turn_rate, "hostile": true, "alive": true,
+			"health": health, "max_health": health, "shield": stats.shield, "max_shield": stats.shield, "shield_delay": 0.0,
+			"shield_recharge": stats.shield_recharge, "fire_cooldown": 0.5, "fire_interval": 1.0,
+			"speed": stats.normal_speed if stats.has_command_deck else 0.0, "acceleration": stats.travel_acceleration,
+			"avoid_side": 1.0 if enemies.size() % 2 == 0 else -1.0, "dimensions": dimensions, "radius": radius, "ship_scale": scale_factor,
+			"exterior": exterior, "decorations": decorations, "glass": glass, "hull_shapes": shapes,
+			"turrets": turrets.duplicate(true), "engines": engines.duplicate(true), "next_turret": 0}
+		_add_enemy_visual(enemy, parts, bounds, scale_factor)
+		spawned += 1
+		if spawned == count:
+			break
+	_queue_flight_redraw()
+	return spawned
+
+func _npc_spawn_clear(point: Vector2, radius: float) -> bool:
+	if not _world_bounds().grow(-radius).has_point(point):
+		return false
+	for enemy in enemies:
+		if enemy.alive and point.distance_to(enemy.position) < radius + float(enemy.radius) + 40.0:
+			return false
+	for rock in asteroids:
+		if rock.iron > 0 and point.distance_to(rock.position) < radius + float(rock.radius) + 40.0:
+			return false
+	for index in fleet.size():
+		if index != active_fleet_index and point.distance_to(_ship_local(fleet[index])) < radius + float(fleet[index].radius) + 40.0:
+			return false
+	return true
+
+func _debug_clear_enemies() -> void:
+	if not debug_sandbox:
+		return
+	_clear_enemies()
+	projectiles.clear()
+	rocket_smoke.clear()
+	rocket_blasts.clear()
+	_queue_flight_redraw()
 
 func _cycle_target() -> void:
 	if _combat_locked():
@@ -2417,7 +2857,7 @@ func _cycle_target() -> void:
 	auto_approach = false
 	var candidates: Array[Dictionary] = []
 	for i in range(enemies.size()):
-		if enemies[i].alive:
+		if enemies[i].alive and not enemies[i].get("civilian", false):
 			var distance: float = ship_position.distance_to(enemies[i].position)
 			if distance <= TARGET_RANGE:
 				candidates.append({"type": "enemy", "index": i, "distance": distance})
@@ -2455,7 +2895,7 @@ func _select_target_at(world_position: Vector2) -> void:
 	var ship_padding := 6.0 / camera_zoom
 	for i in range(enemies.size() - 1, -1, -1):
 		var enemy: Dictionary = enemies[i]
-		if not enemy.alive:
+		if not enemy.alive or enemy.get("civilian", false):
 			continue
 		var offset: Vector2 = world_position - enemy.position
 		var local_point := offset.rotated(-float(enemy.heading) - PI / 2.0)
@@ -2484,7 +2924,7 @@ func _break_up_enemy(enemy: Dictionary) -> void:
 			direction = Vector2.from_angle(rng.randf_range(0.0, TAU))
 		debris.append({
 			"position": enemy.position + offset, "velocity": direction * rng.randf_range(15.0, 75.0),
-			"rotation": rotation, "spin": rng.randf_range(-2.2, 2.2), "part": module.part,
+			"rotation": rotation, "spin": rng.randf_range(-2.2, 2.2), "part": module.part, "scale": enemy.get("ship_scale", ENEMY_PART_SCALE),
 			"life": rng.randf_range(2.8, 4.5),
 		})
 
@@ -2555,6 +2995,8 @@ func _player_shot_contact(start: Vector2, end: Vector2) -> Variant:
 	return PROJECTILE_GEOMETRY.ship_hull_hit(start, end, ship_position, heading, cached_hull_shapes)
 
 func _enemy_hull_contact(start: Vector2, end: Vector2, enemy: Dictionary) -> Variant:
+	if enemy.has("hull_shapes"):
+		return PROJECTILE_GEOMETRY.ship_hull_hit(start, end, enemy.position, enemy.heading, enemy.hull_shapes)
 	return PROJECTILE_GEOMETRY.ship_cells_hit(start, end, enemy.position, enemy.heading, enemy.exterior, MODULES.CELL * ENEMY_PART_SCALE)
 
 func _make_spark_rays(direction: float) -> Array[Dictionary]:
@@ -2742,7 +3184,7 @@ func _aimed_mining_rate(target_position: Vector2) -> float:
 	var rate := 0.0
 	for part in cached_turret_mounts:
 		if part.get("turret", "") == "miner" and _turret_is_aimed(part, target_position):
-			rate += float(MODULES.TYPES.miner.mining)
+			rate += MODULES.block_stat("miner", "mining", debug_tuning.blocks)
 	return rate
 
 func _next_machine_gun_shot(previous: Dictionary) -> Dictionary:
@@ -2759,18 +3201,27 @@ func _fire_enemy_turret(enemy: Dictionary) -> void:
 	var origin: Vector2 = enemy.position + mount.offset.rotated(float(enemy.heading) + PI / 2.0)
 	var shot := {"position": origin + direction * 13.0, "velocity": direction * 800.0, "friendly": false}
 	var cadence := 1.0
+	var scale_factor: float = enemy.get("ship_scale", ENEMY_PART_SCALE)
 	match mount.part.turret:
+		"railgun":
+			shot.merge({"kind": "railgun", "damage": 30.0, "muzzle": origin})
+			shot.velocity = direction * RAILGUN_SPEED
+			cadence = 1.8
 		"machine_gun", "retro_machine_gun", "long_machine_gun":
 			var burst := _next_machine_gun_shot(mount.get("machine_gun_shot", {}))
 			mount.machine_gun_shot = burst
-			shot.position = origin + MODULES.machine_gun_muzzle_offset(burst.barrel, aim_angle + PI / 2.0, ENEMY_PART_SCALE, mount.part.turret == "long_machine_gun", mount.part.turret == "retro_machine_gun")
+			shot.position = origin + MODULES.machine_gun_muzzle_offset(burst.barrel, aim_angle + PI / 2.0, scale_factor, mount.part.turret == "long_machine_gun", mount.part.turret == "retro_machine_gun")
 			shot.merge({"kind": "bullet", "damage": 5.0})
 			shot.velocity = direction * 1050.0
 			cadence = 0.55
 		"missile":
-			shot = _make_rocket(origin, aim_angle, enemy.velocity, false, 16.0, ENEMY_PART_SCALE)
+			shot = _make_rocket(origin, aim_angle, enemy.velocity, false, 16.0, scale_factor)
 			mount.rocket_launched_at = elapsed
 			cadence = 1.7
+	if enemy.get("encounter", false):
+		shot.encounter = true
+		shot.expires = elapsed + 8.0
+		shot.damage = float(shot.get("damage", 10.0)) * float(enemy.damage_factor)
 	projectiles.append(shot)
 	enemy.fire_cooldown = rng.randf_range(0.65, 1.05) * float(enemy.fire_interval) * cadence
 
@@ -2863,7 +3314,7 @@ func _mining_block_reason(index: int) -> String:
 		return "No mining laser equipped."
 	if profile.cargo_capacity <= 0:
 		return "Ship has no cargo capacity."
-	var cargo: Dictionary = {"iron": iron, "tritium": tritium} if index == active_fleet_index else fleet[index].cargo
+	var cargo: Dictionary = _flight_cargo() if index == active_fleet_index else fleet[index].cargo
 	return "Cargo hold is full." if SHIP_CAPABILITIES.available_space(profile, cargo) <= 0 else ""
 
 func _issue_mining_order(rock: int, append: bool) -> void:
@@ -2943,9 +3394,9 @@ func _finish_rts_selection(screen_position: Vector2) -> void:
 				selected_enemy = -1
 				selected_asteroid = rock
 				if selected_fleet.is_empty():
-					_show_order_notice("Select a mining ship, then right-click the asteroid to mine it.")
+					_show_order_notice("Select a mining ship, then use %s on the asteroid to mine it." % KEY_BINDINGS.label("flight_order"))
 				else:
-					_show_order_notice("Right-click the asteroid to mine it with the selected ships.")
+					_show_order_notice("Use %s on the asteroid to mine it with the selected ships." % KEY_BINDINGS.label("flight_order"))
 			else:
 				selected_fleet.clear()
 				selected_asteroid = -1
@@ -2953,7 +3404,19 @@ func _finish_rts_selection(screen_position: Vector2) -> void:
 	_queue_flight_redraw()
 
 func _input(event: InputEvent) -> void:
-	game_input._input(event)
+	if _jobs_open():
+		if KEY_BINDINGS.pressed(event, "game_back") and KEY_BINDINGS.shortcut_allowed(event, get_viewport()):
+			_close_jobs()
+			get_viewport().set_input_as_handled()
+		return
+	if game_started and OS.is_debug_build() and KEY_BINDINGS.pressed(event, "flight_debug") and KEY_BINDINGS.shortcut_allowed(event, get_viewport()) \
+		and not is_instance_valid(settings_layer) and not is_instance_valid(hangar_layer) \
+		and (not is_instance_valid(fleet_dialog) or not fleet_dialog.visible):
+		_toggle_debug_menu()
+		get_viewport().set_input_as_handled()
+		return
+	if not is_instance_valid(debug_menu) or not debug_menu.visible:
+		game_input._input(event)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and game_started and not _save_galaxy():
@@ -2963,6 +3426,8 @@ func _notification(what: int) -> void:
 		rts_dragging = false
 		radial_menu_open = false
 		camera_dragging = false
+		game_input.drag_trigger = null
+		game_input.last_pointer = Vector2.INF
 		
 func _make_rocket(origin: Vector2, angle: float, carrier_velocity: Vector2, friendly: bool, damage: float, scale_factor: float = 1.0) -> Dictionary:
 	return ROCKET_PROJECTILE.create(origin, angle, carrier_velocity, friendly, damage, scale_factor)
@@ -3001,7 +3466,7 @@ func _update_mining(delta: float) -> void:
 	if ship_position.distance_to(asteroid.position) > MINING_CONTROLLER.mining_range(asteroid.radius, _ship_half_length()):
 		return
 	var rate := _aimed_mining_rate(asteroid.position)
-	var capacity_left := SHIP_CAPABILITIES.available_space(_custom_stats(), {"iron": iron, "tritium": tritium})
+	var capacity_left := SHIP_CAPABILITIES.available_space(_custom_stats(), _flight_cargo())
 	var result := MINING_CONTROLLER.tick(asteroid.iron, mining_progress, rate, capacity_left, delta)
 	mining_progress = result.progress
 	mining = result.active
@@ -3212,7 +3677,7 @@ func _update_idle_flight(speed_limit: float, ship_acceleration: float, ship_turn
 		var burst_limit := speed_limit * lerpf(1.75, 3.0, boost_power)
 		velocity = (velocity + Vector2.from_angle(heading) * boost_force * delta).limit_length(maxf(burst_limit, velocity.length()))
 		return
-	velocity *= exp(-drag * delta)
+	velocity *= exp(-drag * debug_tuning.factor("drag") * delta)
 	if velocity.length_squared() < 0.25:
 		velocity = Vector2.ZERO
 	if velocity.length() > speed_limit and ship_acceleration > 0.0:
@@ -3432,6 +3897,9 @@ func _step_flight(delta: float) -> void:
 	_update_player_exhaust(delta)
 	_update_exhaust_particles(delta)
 	_commit_active_ship_state()
+	missions.update()
+	if OS.is_debug_build():
+		debug_tuning.sample(velocity.length())
 
 func _update_owned_fleet(delta: float) -> void:
 	player_fleet_body.position = ship_position
@@ -3578,7 +4046,7 @@ func _step_parked_navigation(ship: Dictionary, delta: float) -> float:
 		if ship.velocity == Vector2.ZERO:
 			ship.navigation.mode = "idle"
 	else:
-		var drift_velocity := current * exp(-drag * delta)
+		var drift_velocity := current * exp(-drag * debug_tuning.factor("drag") * delta)
 		ship.velocity = drift_velocity if drift_velocity.length_squared() >= 0.25 else Vector2.ZERO
 		ship.navigation.mode = "drift" if ship.velocity != Vector2.ZERO else "idle"
 	return 0.0
@@ -3632,9 +4100,10 @@ func _draw_debris(canvas: CanvasItem) -> void:
 			continue
 		canvas.draw_set_transform(_world_to_screen(piece.position), piece.rotation, Vector2.ONE * camera_zoom)
 		var alpha: float = minf(1.0, piece.life / 1.5)
-		MODULES.draw_part(canvas, piece.part, Vector2.ZERO, ENEMY_PART_SCALE, alpha)
+		var scale_factor: float = piece.get("scale", ENEMY_PART_SCALE)
+		MODULES.draw_part(canvas, piece.part, Vector2.ZERO, scale_factor, alpha)
 		if piece.part.has("turret"):
-			MODULES.draw_mounted_turret(canvas, piece.part.turret, Vector2.ZERO, ENEMY_PART_SCALE, alpha)
+			MODULES.draw_mounted_turret(canvas, piece.part.turret, Vector2.ZERO, scale_factor, alpha)
 
 func _draw() -> void:
 	if not game_started:
@@ -3712,6 +4181,7 @@ func _draw() -> void:
 	var marker_view := get_viewport_rect().grow(8.0)
 	var ship_screen := _fleet_screen_position(active_fleet_index, anchor)
 	_draw_hud(size)
+	missions.draw_markers(self)
 	_draw_aim_indicators(size)
 	var marker_alpha := 1.0 - smoothstep(FLEET_HULL_MIN_PIXELS, FLEET_HULL_FULL_PIXELS, _ship_size().y * camera_zoom)
 	if marker_alpha > 0.0 and marker_view.has_point(ship_screen):
@@ -3745,7 +4215,7 @@ func _draw() -> void:
 			if index == active_fleet_index:
 				continue
 			var owned_ship: Dictionary = fleet[index]
-			if owned_ship.navigation.mode == "move":
+			if owned_ship.navigation.mode in ["move", "boost"] and owned_ship.navigation.has("target"):
 				var marker := _world_to_screen(SHIP_STATE.relative(owned_ship.navigation.target, galaxy_origin))
 				draw_line(_fleet_screen_position(index, anchor), marker, Color(0.47, 0.94, 0.73, 0.35), 1.25, true)
 				draw_arc(marker, 10.0, 0.0, TAU, 32, Color("79efbb"), 2.0, true)
@@ -3769,9 +4239,10 @@ func _draw_radial_menu() -> void:
 	draw_arc(radial_menu_position, 18.0, 0.0, TAU, 32, Color("507383"), 1.0, true)
 	var font := ThemeDB.fallback_font
 	draw_string(font, radial_menu_position + Vector2(-8, 5), "×", HORIZONTAL_ALIGNMENT_CENTER, 16.0, 16, Color("9ab3bf"))
-	var label := "EXIT BOOST" if sustained_boost_enabled else "BOOST"
-	draw_string(font, radial_menu_position + Vector2(-60, -35), label, HORIZONTAL_ALIGNMENT_CENTER, 120.0, 12, Color("dcf4ff"))
-	draw_string(font, radial_menu_position + Vector2(-65, 47), "RIGHT-CLICK A SYSTEM", HORIZONTAL_ALIGNMENT_CENTER, 130.0, 10, Color("91aebe"))
+	var label := "CANCEL HYPERJUMP" if hyperjump_time >= 0.0 else ("EXIT BOOST" if sustained_boost_enabled else "BOOST")
+	draw_string(font, radial_menu_position + Vector2(-70, -35), label, HORIZONTAL_ALIGNMENT_CENTER, 140.0, 12, Color("dcf4ff"))
+	if hyperjump_time < 0.0:
+		draw_string(font, radial_menu_position + Vector2(-65, 47), (KEY_BINDINGS.label("flight_order") + " A SYSTEM").to_upper(), HORIZONTAL_ALIGNMENT_CENTER, 130.0, 10, Color("91aebe"))
 
 func _draw_rocket(shot: Dictionary) -> void:
 	var center: Vector2 = shot.position
@@ -3928,13 +4399,11 @@ func _update_exhaust_particles(delta: float) -> void:
 	exhaust_particles.resize(remaining)
 	var player_pose := Transform2D(heading + PI / 2.0, ship_position)
 	_update_engine_trails(cached_engines, player_pose, velocity, engine_flame, _sustained_boost_active())
-	for enemy in enemies:
-		_update_engine_trails(enemy.engines, Transform2D(float(enemy.heading) + PI / 2.0, enemy.position),
-			enemy.velocity, _enemy_engine_power(enemy) if enemy.alive else 0.0)
 	for id: String in fleet_views:
 		var ship := ship_registry.find(id)
 		var view: Dictionary = fleet_views[id]
-		_update_engine_trails(view.engines, Transform2D(float(ship.heading) + PI / 2.0, _ship_local(ship)), ship.velocity, float(view.engine_flame))
+		var travelling: bool = ship.navigation.mode in ["boost", "jump"]
+		_update_engine_trails(view.engines, Transform2D(float(ship.heading) + PI / 2.0, _ship_local(ship)), ship.velocity, float(view.engine_flame), travelling)
 	if camera_zoom < EXHAUST_PARTICLE_MIN_ZOOM:
 		return
 	var visible_world := _visible_world(_world_transform())
@@ -3948,12 +4417,15 @@ func _update_exhaust_particles(delta: float) -> void:
 			_emit_exhaust_particles(enemy.engines, Transform2D(float(enemy.heading) + PI / 2.0, enemy.position),
 				enemy.velocity, _enemy_engine_power(enemy), 0.0, delta, visible_world)
 
-func _update_engine_trails(engines: Array[Dictionary], pose: Transform2D, ship_velocity: Vector2, power: float, sustained_boost: bool = false) -> void:
+func _update_engine_trails(engines: Array[Dictionary], pose: Transform2D, ship_velocity: Vector2, power: float, travelling: bool) -> void:
 	for engine in engines:
+		if not travelling and not engine.has("trail"):
+			continue
 		var trail: Array = engine.get("trail", [])
-		while not trail.is_empty() and elapsed - float(trail[0].time) >= float(trail[0].get("lifetime", ENGINE_TRAIL_LIFETIME)):
+		while not trail.is_empty() and elapsed - float(trail[0].time) >= BOOST_TRAIL_LIFETIME:
 			trail.pop_front()
-		var active := power > 0.05 and ship_velocity.length_squared() > 400.0
+		# The compact burn has no lingering line at normal flight speed.
+		var active := travelling and power > 0.05 and ship_velocity.length_squared() > 400.0
 		if active:
 			var position: Vector2 = (pose * engine.nozzle) * Vector2(0.0, 8.0 * float(engine.get("effect_scale", 1.0)))
 			engine.trail_head = position
@@ -3962,7 +4434,6 @@ func _update_engine_trails(engines: Array[Dictionary], pose: Transform2D, ship_v
 			if fresh_segment or trail.is_empty() or elapsed - float(trail[-1].time) >= ENGINE_TRAIL_INTERVAL - 0.00001:
 				trail.append({
 					"position": position, "time": elapsed, "power": power, "break_before": fresh_segment,
-					"lifetime": BOOST_TRAIL_LIFETIME if sustained_boost else ENGINE_TRAIL_LIFETIME,
 				})
 		engine.trail = trail
 		engine.trail_active = active
@@ -3983,7 +4454,7 @@ func _draw_engine_trails(canvas: CanvasItem, engines: Array[Dictionary]) -> void
 			var point: Vector2 = (sample.position as Vector2) - _camera_center()
 			if not points.is_empty() and points[-1].distance_squared_to(point) < 0.01:
 				continue
-			var fade := pow(clampf(1.0 - (elapsed - float(sample.time)) / float(sample.get("lifetime", ENGINE_TRAIL_LIFETIME)), 0.0, 1.0), 1.5) * float(sample.power)
+			var fade := pow(clampf(1.0 - (elapsed - float(sample.time)) / BOOST_TRAIL_LIFETIME, 0.0, 1.0), 1.5) * float(sample.power)
 			points.append(point)
 			colors.append(Color(1.0, 0.55, 0.22, 0.42 * fade))
 		if bool(engine.get("trail_active", false)) and not points.is_empty():
@@ -3995,17 +4466,14 @@ func _draw_engine_trails(canvas: CanvasItem, engines: Array[Dictionary]) -> void
 			canvas.draw_polyline_colors(points, colors, half_width * 2.0, true)
 
 func _emit_exhaust_particles(engines: Array[Dictionary], pose: Transform2D, ship_velocity: Vector2, power: float, boost: float, delta: float, visible_world: Rect2) -> void:
-	if power <= 0.01:
+	if power <= 0.10:
 		return
-	var density := (24.0 + 22.0 * graphics_quality) * power * (1.0 + boost)
+	var rate := (11.0 + 4.0 * graphics_quality) * power * smoothstep(0.10, 0.55, power)
 	for engine in engines:
 		var nozzle: Transform2D = pose * engine.nozzle
-		if not visible_world.has_point(nozzle.origin):
+		var bell := SHORT_BELL.dimensions(engine.bell_size, power, boost)
+		if bell.x * camera_zoom < 1.5 or not visible_world.has_point(nozzle.origin):
 			continue
-		var effect_scale := float(engine.get("effect_scale", 1.0))
-		var size: Vector2 = engine.size / effect_scale
-		var width_scale := sqrt(size.x)
-		var rate := density * width_scale * size.y
 		var emission := float(engine.get("emission", 0.0)) + rate * delta
 		var count := int(emission)
 		engine.emission = emission - count
@@ -4013,84 +4481,59 @@ func _emit_exhaust_particles(engines: Array[Dictionary], pose: Transform2D, ship
 			if exhaust_particles.size() >= EXHAUST_PARTICLE_LIMIT:
 				return
 			var age := (emission - index - 1.0) / rate
-			var spread := exhaust_rng.randf_range(-1.0, 1.0)
-			var spark := exhaust_rng.randf() < 0.45
-			var speed := exhaust_rng.randf_range(305.0, 460.0) if spark else exhaust_rng.randf_range(130.0, 235.0)
-			speed *= size.y * effect_scale * lerpf(0.70, 1.0, power) * (1.0 + boost * 0.85)
-			var jet := nozzle.basis_xform(Vector2(spread * speed * (0.20 if spark else 0.28), speed))
 			var particle := ExhaustParticle.new()
-			# Each particle inherits the ship's motion and keeps its launch direction.
-			particle.origin = nozzle * (Vector2(spread * size.x * 4.0, 3.0) * effect_scale) - ship_velocity * age
+			particle.lifetime = exhaust_rng.randf_range(0.29, 0.43)
+			var side := -1.0 if exhaust_rng.randf() < 0.5 else 1.0
+			var drift := side * bell.x * exhaust_rng.randf_range(0.30, 0.73)
+			var reach := bell.y * exhaust_rng.randf_range(0.90, 1.30)
+			var jet := nozzle.basis_xform(Vector2(drift, reach) / particle.lifetime)
+			# Embers inherit ship velocity but keep their own launch direction after cutoff.
+			particle.origin = nozzle * Vector2(side * bell.x * exhaust_rng.randf_range(0.16, 0.34), 0.0) - ship_velocity * age
 			particle.velocity = ship_velocity + jet
 			particle.born = elapsed - age
-			particle.lifetime = exhaust_rng.randf_range(0.18, 0.31) if spark else exhaust_rng.randf_range(0.25, 0.41)
-			particle.radius = exhaust_rng.randf_range(1.3, 2.4) if spark else exhaust_rng.randf_range(3.0, 6.0)
-			particle.radius *= lerpf(0.6, 1.0, size.y) * width_scale * effect_scale
-			particle.opacity = lerpf(0.4, 1.0, power)
-			if spark:
-				particle.streak = jet * exhaust_rng.randf_range(0.020, 0.035)
+			particle.width = bell.x * exhaust_rng.randf_range(0.059, 0.095)
+			particle.streak = jet.normalized() * bell.x * exhaust_rng.randf_range(0.15, 0.28)
+			particle.opacity = exhaust_rng.randf_range(0.47, 0.81) * smoothstep(0.10, 0.55, power)
 			exhaust_particles.append(particle)
 
 func _draw_exhaust_particles(canvas: CanvasItem) -> void:
 	_draw_engine_trails(canvas, cached_engines)
 	for view: Dictionary in fleet_views.values():
 		_draw_engine_trails(canvas, view.engines)
-	for enemy in enemies:
-		_draw_engine_trails(canvas, enemy.engines)
-	if camera_zoom < EXHAUST_PARTICLE_MIN_ZOOM:
+	if camera_zoom < EXHAUST_PARTICLE_MIN_ZOOM or exhaust_particles.is_empty():
 		return
 	var visible_world := _visible_world(_world_transform())
+	var camera_center := _camera_center()
 	for particle in exhaust_particles:
 		var age := elapsed - particle.born
 		var world_position := particle.origin + particle.velocity * age
 		if not visible_world.has_point(world_position):
 			continue
-		var position := (particle.origin - _camera_center()) + particle.velocity * age
+		var position := world_position - camera_center
 		var progress := clampf(age / particle.lifetime, 0.0, 1.0)
-		var fade := (1.0 - progress) * particle.opacity
-		if particle.streak != Vector2.ZERO:
-			var color := EXHAUST_SPARK_HOT.lerp(EXHAUST_SPARK_COOL, progress)
-			color.a = fade
-			canvas.draw_line(position, position - particle.streak * (1.0 - progress), color, particle.radius, true)
-		else:
-			var color := EXHAUST_PLUME_HOT.lerp(EXHAUST_PLUME_COOL, progress)
-			color.a = fade * lerpf(0.40, 0.10, progress)
-			var radius := Vector2.ONE * particle.radius * lerpf(1.0, 3.6, progress)
-			canvas.draw_texture_rect(engine_light_texture, Rect2(position - radius, radius * 2.0), false, color)
+		var color := EXHAUST_SPARK_HOT.lerp(EXHAUST_SPARK_COOL, progress)
+		color.a = smoothstep(0.05, 0.24, progress) * (1.0 - smoothstep(0.46, 1.0, progress)) * particle.opacity
+		if color.a > 0.02:
+			canvas.draw_line(position, position - particle.streak, color, particle.width, true)
 
-func _draw_engine_flare(canvas: CanvasItem, engine: Dictionary, power: float, phase: float, boost: float = 0.0) -> void:
+func _draw_short_bell(canvas: CanvasItem, engine: Dictionary, power: float, phase: float, boost: float = 0.0) -> void:
 	if power <= 0.01:
 		return
-	var size: Vector2 = engine.size
-	var intensity := minf(power * 2.0, 1.0)
-	var flicker := 0.94 + 0.08 * sin(elapsed * 27.0 + phase) + 0.04 * sin(elapsed * 49.0 + phase * 1.7)
-	var width := (7.0 + 3.0 * power) * size.x * (1.0 + boost * 0.25)
-	var length := (32.0 + 26.0 * power) * size.y * (1.0 + boost * 1.5) * flicker
-	var center := Vector2(0.0, width * 0.45)
+	var size := SHORT_BELL.dimensions(engine.bell_size, power, boost)
+	var length := size.y * SHORT_BELL.flicker(elapsed, phase)
+	var intensity := SHORT_BELL.intensity(power)
+	var half_width := size.x * SHORT_BELL.TEXTURE_HALF_WIDTH
+	var halo := Vector2(size.x * 2.52, length * 0.49)
+	var center := Vector2(0.0, length * 0.15)
 	canvas.draw_set_transform_matrix(engine.nozzle)
-	# A broad, soft halo and fine rays frame the white-hot engine core.
-	var halo := Vector2(width * 4.5, width * 4.5)
-	canvas.draw_texture_rect(engine_light_texture, Rect2(center - halo, halo * 2.0), false, Color(1.0, 0.66, 0.31, 0.42 * intensity))
-	var ray_length := width * 5.5 * flicker
-	canvas.draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-ray_length, 0), center + Vector2(0, -width * 0.22),
-		center + Vector2(ray_length, 0), center + Vector2(0, width * 0.22),
-	]), Color(1.0, 0.82, 0.55, 0.20 * intensity))
-	canvas.draw_colored_polygon(PackedVector2Array([
-		Vector2(-width * 0.8, 0), Vector2(-width * 0.45, length * 0.26),
-		Vector2(0, length), Vector2(width * 0.45, length * 0.26), Vector2(width * 0.8, 0),
-	]), Color(1.0, 0.49, 0.15, 0.32 * intensity))
-	var core_glow := Vector2(width * 1.7, width * 1.7)
-	canvas.draw_texture_rect(engine_light_texture, Rect2(center - core_glow, core_glow * 2.0), false, Color(1.0, 0.91, 0.68, 0.9 * intensity))
-	canvas.draw_colored_polygon(PackedVector2Array([
-		Vector2(-width * 0.55, 0), Vector2(-width * 0.4, width * 1.1),
-		Vector2(0, length * 0.38), Vector2(width * 0.4, width * 1.1), Vector2(width * 0.55, 0),
-	]), Color(1.0, 0.98, 0.87, intensity))
+	canvas.draw_texture_rect(engine_light_texture, Rect2(center - halo, halo * 2.0), false, Color(1.0, 0.48, 0.17, 0.30 * intensity))
+	canvas.draw_texture_rect(short_bell_texture, Rect2(-half_width, -length * 0.023, half_width * 2.0, length), false, Color(1.0, 1.0, 1.0, intensity))
+	canvas.draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _draw_engine_exhaust(canvas: CanvasItem) -> void:
 	for index in range(cached_engines.size()):
 		var engine: Dictionary = cached_engines[index]
-		_draw_engine_flare(canvas, engine, engine_flame, float(index) * 2.7, engine_overdrive)
+		_draw_short_bell(canvas, engine, engine_flame, float(index) * 2.7, engine_overdrive)
 
 func _draw_machine_gun_flash(canvas: CanvasItem, center: Vector2, turret_angle: float, scale_factor: float, shot: Dictionary, is_long: bool, is_retro: bool = false) -> void:
 	if shot.is_empty():
@@ -4140,28 +4583,35 @@ func _draw_rocket_launch(canvas: CanvasItem, center: Vector2, turret_angle: floa
 	canvas.draw_circle(base, 3.5 * fade * scale_factor, Color(1.0, 0.94, 0.76, fade), true, -1.0, true)
 
 func _draw_enemy_exhaust(canvas: CanvasItem, enemy: Dictionary) -> void:
-	for engine in enemy.engines:
-		_draw_engine_flare(canvas, engine, _enemy_engine_power(enemy), float(engine.phase))
+	var power := _enemy_engine_power(enemy)
+	for index in range(enemy.engines.size()):
+		_draw_short_bell(canvas, enemy.engines[index], power, float(index) * 2.7)
 
 func _draw_enemy_hull(canvas: CanvasItem, enemy: Dictionary, index: int) -> void:
+	var scale_factor: float = enemy.get("ship_scale", ENEMY_PART_SCALE)
+	var glass: Dictionary = enemy.get("glass", {})
 	for module in enemy.exterior:
-		MODULES.draw_part(canvas, module.part, module.offset, ENEMY_PART_SCALE)
-		_draw_part_shield_glow(canvas, module.part, module.offset, enemy.dimensions, ENEMY_PART_SCALE, index)
+		MODULES.draw_part(canvas, module.part, module.offset, scale_factor, 1.0, Color.WHITE, 1.0, false, glass)
+		_draw_part_shield_glow(canvas, module.part, module.offset, enemy.dimensions, scale_factor, index, false, 0.0, 0.0, glass)
+	for module in enemy.get("decorations", []):
+		MODULES.draw_part(canvas, module.part, module.offset, scale_factor)
 
 func _draw_enemy_turrets(canvas: CanvasItem, enemy: Dictionary, index: int) -> void:
 	var turret_angle := angle_difference(enemy.heading, enemy.aim_angle)
+	var scale_factor: float = enemy.get("ship_scale", ENEMY_PART_SCALE)
 	for mount in enemy.turrets:
 		var recoil := _rocket_recoil(elapsed - float(mount.get("rocket_launched_at", -INF)))
-		MODULES.draw_mounted_turret(canvas, mount.part.turret, mount.offset, ENEMY_PART_SCALE, 1.0, Color.WHITE, turret_angle, recoil)
-		_draw_part_shield_glow(canvas, mount.part, mount.offset, enemy.dimensions, ENEMY_PART_SCALE, index, true, turret_angle, recoil)
+		MODULES.draw_mounted_turret(canvas, mount.part.turret, mount.offset, scale_factor, 1.0, Color.WHITE, turret_angle, recoil)
+		_draw_part_shield_glow(canvas, mount.part, mount.offset, enemy.dimensions, scale_factor, index, true, turret_angle, recoil)
 
 func _draw_enemy_effects(canvas: CanvasItem, enemy: Dictionary, index: int) -> void:
 	var turret_angle := angle_difference(enemy.heading, enemy.aim_angle)
+	var scale_factor: float = enemy.get("ship_scale", ENEMY_PART_SCALE)
 	for mount in enemy.turrets:
 		if mount.has("machine_gun_shot"):
-			_draw_machine_gun_flash(canvas, mount.offset, turret_angle, ENEMY_PART_SCALE, mount.machine_gun_shot, mount.part.turret == "long_machine_gun", mount.part.turret == "retro_machine_gun")
+			_draw_machine_gun_flash(canvas, mount.offset, turret_angle, scale_factor, mount.machine_gun_shot, mount.part.turret == "long_machine_gun", mount.part.turret == "retro_machine_gun")
 		if mount.has("rocket_launched_at"):
-			_draw_rocket_launch(canvas, mount.offset, turret_angle, ENEMY_PART_SCALE, elapsed - float(mount.rocket_launched_at))
+			_draw_rocket_launch(canvas, mount.offset, turret_angle, scale_factor, elapsed - float(mount.rocket_launched_at))
 	_draw_shield_impacts(index, enemy.dimensions, canvas)
 	_draw_hull_impacts(index, canvas)
 	if selected_enemy == index:
@@ -4177,20 +4627,22 @@ func _draw_enemy_effects(canvas: CanvasItem, enemy: Dictionary, index: int) -> v
 		bar_position.y += 9.0
 		canvas.draw_rect(Rect2(bar_position, Vector2(70, 5)), Color(0.12, 0.03, 0.03, 0.9))
 		canvas.draw_rect(Rect2(bar_position, Vector2(70.0 * enemy.health / enemy.max_health, 5)), Color("f27065"))
+		if enemy.has("name"):
+			canvas.draw_string(ThemeDB.fallback_font, Vector2(-90, bar_position.y - 17), enemy.name, HORIZONTAL_ALIGNMENT_CENTER, 180.0, 14, marker_color)
 
 func _draw_custom_ship(canvas: CanvasItem) -> void:
 	var center := cached_ship_bounds.get_center()
 	var ship_scale := cached_ship_scale
-	var dimensions := _ship_size()
+	if cached_tiled_hull != null:
+		canvas.draw_mesh(cached_tiled_hull, MODULES.HULL_TEXTURES.retro_plain)
 	for index in range(custom_parts.size()):
 		var part: Dictionary = custom_parts[index]
-		if not MODULES.is_exterior_structure(part):
+		if not MODULES.is_exterior_structure(part) or part.type in MODULES.TILED_HULL_TYPES:
 			continue
 		var position := (MODULES.part_position(part) - center) * ship_scale
-		MODULES.draw_part(canvas, part, position, ship_scale, 1.0, Color.WHITE, 1.0, true)
+		MODULES.draw_part(canvas, part, position, ship_scale, 1.0, Color.WHITE, 1.0, true, cached_window_context)
 		if cached_armour_borders.has(index):
 			_draw_player_armour_border(canvas, part, index, center, ship_scale)
-		_draw_part_shield_glow(canvas, part, position, dimensions, ship_scale, -1)
 	for index in cached_armour_borders:
 		var panel: Dictionary = custom_parts[index]
 		if not MODULES.is_armour_overlay(panel):
@@ -4198,7 +4650,31 @@ func _draw_custom_ship(canvas: CanvasItem) -> void:
 		var position := (MODULES.part_position(panel) - center) * ship_scale
 		MODULES.draw_part(canvas, panel, position, ship_scale)
 		_draw_player_armour_border(canvas, panel, index, center, ship_scale)
-		_draw_part_shield_glow(canvas, panel, position, dimensions, ship_scale, -1)
+
+func _update_player_shield_glow(active: bool) -> void:
+	if not active and player_shield_glow_count == 0:
+		return
+	var material := player_visual.material as ShaderMaterial
+	var glow := PackedVector4Array()
+	glow.resize(4)
+	var count := 0
+	if active:
+		var radii := _ship_size() * 0.5 + Vector2.ONE * SHIELD_MARGIN * cached_ship_scale
+		for index in range(shield_impacts.size() - 1, -1, -1):
+			var impact: Dictionary = shield_impacts[index]
+			if impact.enemy != -1:
+				continue
+			var direction := Vector2.from_angle(impact.angle)
+			var angle := atan2(direction.y / radii.y, direction.x / radii.x)
+			var point := Vector2.from_angle(angle) * radii
+			glow[count] = Vector4(point.x, point.y, 1.0 / (100.0 * cached_ship_scale), float(impact.life) / SHIELD_IMPACT_DURATION * 0.8)
+			count += 1
+			if count == glow.size():
+				break
+	material.set_shader_parameter("shield_glow_count", count)
+	if count > 0:
+		material.set_shader_parameter("shield_glows", glow)
+	player_shield_glow_count = count
 
 func _draw_player_armour_border(canvas: CanvasItem, part: Dictionary, index: int, center: Vector2, ship_scale: float) -> void:
 	var cell_size := MODULES.cell_size_for(part)
@@ -4207,12 +4683,16 @@ func _draw_player_armour_border(canvas: CanvasItem, part: Dictionary, index: int
 
 func _draw_player_details(canvas: CanvasItem) -> void:
 	var center := cached_ship_bounds.get_center()
-	for detail in custom_parts:
-		if MODULES.is_decoration(detail):
-			var brightness := MODULES.navigation_light_brightness(elapsed) if detail.type == "navigation_lights" else 1.0
-			MODULES.draw_part(canvas, detail, (MODULES.part_position(detail) - center) * cached_ship_scale, cached_ship_scale, 1.0, Color.WHITE, brightness)
+	for detail: Dictionary in cached_ship_decorations:
+		var brightness := MODULES.navigation_light_brightness(elapsed) if detail.type == "navigation_lights" else 1.0
+		MODULES.draw_part(canvas, detail, (MODULES.part_position(detail) - center) * cached_ship_scale, cached_ship_scale, 1.0, Color.WHITE, brightness)
+	# Mounts belong to the detail pass so hull tiles and windows cannot cover them.
+	for mount in cached_turret_mounts:
+		var turret_angle := _turret_angle(mount) - heading
+		var recoil := _rocket_recoil(elapsed - float(player_rocket_launches.get(_turret_key(mount), -INF)))
+		MODULES.draw_mounted_turret(canvas, mount.get("visual_type", mount.turret), _turret_local_position(mount), cached_ship_scale, 1.0, Color.WHITE, turret_angle, recoil)
 
-func _draw_part_shield_glow(canvas: CanvasItem, part: Dictionary, position: Vector2, dimensions: Vector2, part_scale: float, enemy_index: int, mounted_turret: bool = false, turret_angle: float = 0.0, recoil: float = 0.0) -> void:
+func _draw_part_shield_glow(canvas: CanvasItem, part: Dictionary, position: Vector2, dimensions: Vector2, part_scale: float, enemy_index: int, mounted_turret: bool = false, turret_angle: float = 0.0, recoil: float = 0.0, glass: Dictionary = {}) -> void:
 	if graphics_quality == 0:
 		return
 	for impact in shield_impacts:
@@ -4230,7 +4710,7 @@ func _draw_part_shield_glow(canvas: CanvasItem, part: Dictionary, position: Vect
 			if mounted_turret:
 				MODULES.draw_mounted_turret(canvas, part.turret, position, part_scale, strength, tint, turret_angle, recoil)
 			else:
-				MODULES.draw_part(canvas, part, position, part_scale, strength, tint, 1.0, enemy_index == -1)
+				MODULES.draw_part(canvas, part, position, part_scale, strength, tint, 1.0, enemy_index == -1, glass)
 
 func _draw_hyperjump_bow(canvas: CanvasItem) -> void:
 	var jump_speed := _hyperjump_cruise_speed()

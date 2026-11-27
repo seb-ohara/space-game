@@ -5,6 +5,9 @@ uniform vec2 relief_origin;
 uniform vec2 relief_size = vec2(1.0);
 uniform vec2 hull_half_size = vec2(1.0);
 uniform vec2 sun_direction = vec2(0.0);
+uniform int shield_glow_count = 0;
+// xy: impact in hull coordinates; z: inverse radius; w: opacity.
+uniform vec4 shield_glows[4];
 
 varying vec2 relief_uv;
 
@@ -38,4 +41,9 @@ void fragment() {
 	float depth = dot(hull_position, -sun_direction) / max(dot(hull_half_size, abs(sun_direction)), 1.0);
 	float fill = 1.0 - 0.18 * smoothstep(0.0, 1.0, depth);
 	COLOR.rgb *= surface_light * mix(vec3(1.0), vec3(0.48, 0.57, 0.72), shade) * fill;
+	for (int i = 0; i < shield_glow_count; i++) {
+		vec4 impact = shield_glows[i];
+		float strength = max(0.0, 1.0 - distance(hull_position, impact.xy) * impact.z) * impact.w;
+		COLOR.rgb = mix(COLOR.rgb, max(COLOR.rgb, vec3(0.32, 0.75, 1.0)), strength);
+	}
 }

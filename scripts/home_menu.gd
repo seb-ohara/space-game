@@ -4,6 +4,8 @@ signal settings_requested
 signal new_game_requested(name: String, galaxy: Dictionary, contents: Dictionary)
 signal load_game_requested(slot_id: String)
 
+const BINDINGS := preload("res://scripts/key_bindings.gd")
+
 const GALAXY := preload("res://scripts/galaxy_generator.gd")
 const SAVES := preload("res://scripts/galaxy_saves.gd")
 const PREVIEW := preload("res://scripts/galaxy_preview.gd")
@@ -298,8 +300,8 @@ func _format_play_time(seconds: float) -> String:
 	var total_minutes := int(seconds) / 60
 	return "%dh %02dm" % [total_minutes / 60, total_minutes % 60]
 
-func _unhandled_input(event: InputEvent) -> void:
-	if not is_visible_in_tree() or not event.is_action_pressed("ui_cancel"):
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree() or not BINDINGS.pressed(event, "game_back") or not BINDINGS.shortcut_allowed(event, get_viewport()):
 		return
 	if menu_page == "generating":
 		_show_setup()

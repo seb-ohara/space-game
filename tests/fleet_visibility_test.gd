@@ -83,9 +83,33 @@ func _run() -> void:
 	assert(game.active_fleet_index == 3 and not game.fleet_views.has(wing.id))
 	assert(game.player_visual.position.distance_to(before_switch) < 0.01, "Rebasing physics must not shift the remote camera.")
 	assert(game.fleet_views.has(lead.id) and game.fleet_colliders.has(lead.id) and not game.fleet_colliders.has(nearby.id))
+	_check_merged_hull(game)
 	game.free()
 	print("Fleet visibility, remote zoom and hull selection checks passed")
 	quit()
+
+func _check_merged_hull(game: Node) -> void:
+	var parts := []
+	for y in range(10):
+		for x in range(10):
+			parts.append({"type":"retro_plain", "fine_grid":true, "x":x * 4 - 20, "y":y * 4, "width":4, "height":4, "rotation":0})
+	var bounds := MODULES.bounds(parts)
+	var scale_factor := 1.25
+	var shapes: Array[PackedVector2Array] = game._fleet_hull_shapes(parts, bounds, scale_factor)
+	assert(shapes.size() == 1, "100 adjacent square panels should use one collider")
+	var panel: Dictionary = parts[27]
+	var hole := Vector2i(int(panel.x) + 2, int(panel.y) + 1)
+	MODULES.remove_block(panel, hole)
+	shapes = game._fleet_hull_shapes(parts, bounds, scale_factor)
+	assert(shapes.size() == 4)
+	for part: Dictionary in parts:
+		var area := MODULES.footprint(part)
+		for y in range(area.position.y, area.end.y):
+			for x in range(area.position.x, area.end.x):
+				var cell := Vector2i(x, y)
+				var point := (MODULES.part_position(part) - bounds.get_center() + Vector2(cell - area.position) * MODULES.FINE_CELL) * scale_factor
+				var collides := shapes.any(func(shape: PackedVector2Array) -> bool: return Geometry2D.is_point_in_polygon(point, shape))
+				assert(collides == (cell != hole), "The merged hull must preserve the exact material mask")
 
 func _ship(position: Vector2) -> Dictionary:
 	return {"name": "Test ship", "parts": MODULES.default_design(), "position": position,

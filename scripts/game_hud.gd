@@ -17,8 +17,7 @@ static func _minimap_chart(map_rect: Rect2, view_size: Vector2, player_position:
 
 func _draw_hud(size: Vector2) -> void:
 	var font = ThemeDB.fallback_font
-	game.draw_string(font, Vector2(30, 17), "FPS  %d" % Engine.get_frames_per_second(), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("d9f0fb"))
-	if game.ENEMY_SHIPS_ENABLED:
+	if game._enemy_waves_enabled() or game.wave_number > 0:
 		game.draw_rect(Rect2(Vector2(size.x / 2.0 - 120.0, 24.0), Vector2(240.0, 54.0)), Color(0.025, 0.06, 0.1, 0.88))
 		game.draw_string(font, Vector2(size.x / 2.0 - 110.0, 47.0), "WAVE %d" % game.wave_number, HORIZONTAL_ALIGNMENT_CENTER, 220.0, 16, Color("e4f5ff"))
 	var map_rect := MINIMAP_RECT
@@ -61,7 +60,7 @@ func _draw_hud(size: Vector2) -> void:
 	var wave_status = "%d NEUTRAL  ·  %d HOSTILE" % [neutral_count, hostile_count]
 	if game.enemy_wave_timer >= 0.0:
 		wave_status = "NEXT WAVE IN %d" % int(ceil(game.enemy_wave_timer))
-	if game.ENEMY_SHIPS_ENABLED:
+	if game._enemy_waves_enabled() or game.wave_number > 0:
 		game.draw_string(font, Vector2(size.x / 2.0 - 110.0, 67.0), wave_status, HORIZONTAL_ALIGNMENT_CENTER, 220.0, 11, Color("91aebe"))
 	if game.hyperjump_time >= 0.0 or game.elapsed < game.hyperjump_arrival_until:
 		var nearby_system = game.solar_system.nearest_system(game.ship_position)
@@ -81,9 +80,10 @@ func _draw_hud(size: Vector2) -> void:
 	var side = forward.orthogonal()
 	game.draw_colored_polygon(PackedVector2Array([player_on_map + forward * 7.0, player_on_map - forward * 5.0 + side * 4.0, player_on_map - forward * 5.0 - side * 4.0]), Color("e0f9ff"))
 	if game.hyperjump_time < 0.0:
-		var navigation_hint := "RIGHT-CLICK TO ISSUE ORDERS"
+		var order_label: String = game.KEY_BINDINGS.label("flight_order").to_upper()
+		var navigation_hint := order_label + " TO ISSUE ORDERS"
 		if game.sustained_boost_enabled:
-			navigation_hint = "BOOST  ·  RIGHT-CLICK TO CHANGE DESTINATION" if game.boost_destination_active else "BOOST  ·  RIGHT-CLICK A DESTINATION"
+			navigation_hint = "BOOST  ·  " + order_label + (" TO CHANGE DESTINATION" if game.boost_destination_active else " A DESTINATION")
 		game.draw_string(font, Vector2(30, size.y - 211), navigation_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("a6bce8"))
 	var bar_left = Vector2(30, size.y - 136)
 	game.draw_rect(Rect2(bar_left + Vector2(-10, -24), Vector2(290, 82)), Color(0.025, 0.06, 0.1, 0.88))
@@ -105,6 +105,11 @@ func _draw_hud(size: Vector2) -> void:
 	var speed_text = game._format_speed(game.velocity.length())
 	game.draw_string(font, Vector2(size.x - 230, 102), speed_text, HORIZONTAL_ALIGNMENT_RIGHT, 200, 24, Color("d9e9f3"))
 	game.draw_string(font, Vector2(size.x - 230, 120), "SPEED (SCALED)", HORIZONTAL_ALIGNMENT_RIGHT, 200, 10, Color("7192a7"))
+	if game.debug_sandbox:
+		var average: String = game._format_speed(game.debug_tuning.average_speed())
+		var peak: String = game._format_speed(game.debug_tuning.peak_speed)
+		game.draw_string(font, Vector2(size.x - 310, 140), "AVG (5 SIM S) %s  ·  PEAK %s" % [average, peak], HORIZONTAL_ALIGNMENT_RIGHT, 280, 11, Color("a9c5d8"))
+		game.draw_string(font, Vector2(size.x - 310, 156), "TURN %+.1f°/s  ·  THROTTLE %.0f%%" % [rad_to_deg(game.angular_velocity), game.thrust * 100.0], HORIZONTAL_ALIGNMENT_RIGHT, 280, 11, Color("a9c5d8"))
 
 func _format_speed(world_units_per_second: float) -> String:
 	var metres_per_second = world_units_per_second / game.MODULES.WORLD_UNITS_PER_METER * game.DISPLAY_SPEED_SCALE
@@ -122,7 +127,11 @@ func _draw_resources(size: Vector2, font: Font) -> void:
 		game.draw_string(font, origin + Vector2(18, 24), "SELECT A SHIP TO VIEW CARGO", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("88a7b9"))
 		return
 	game.draw_string(font, origin + Vector2(18, 22), cargo.name, HORIZONTAL_ALIGNMENT_LEFT, 234, 14, Color("c4d5dd"))
-	game.draw_string(font, origin + Vector2(18, 42), "CARGO  %d / %d" % [cargo.iron + cargo.tritium, cargo.capacity], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("88a7b9"))
+	var freight := int(cargo.get("contracts", 0))
+	var hold := "CARGO  %d / %d" % [cargo.iron + cargo.tritium + freight, cargo.capacity]
+	if freight > 0:
+		hold += "  ·  %d freight" % freight
+	game.draw_string(font, origin + Vector2(18, 42), hold, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("88a7b9"))
 	game.draw_line(origin + Vector2(18, 52), origin + Vector2(252, 52), Color(0.4, 0.6, 0.7, 0.18), 1.0)
 	var iron_icon = origin + Vector2(25, 74)
 	game.draw_colored_polygon(PackedVector2Array([iron_icon + Vector2(0, -7), iron_icon + Vector2(7, 0), iron_icon + Vector2(0, 7), iron_icon + Vector2(-7, 0)]), Color("d39b73"))

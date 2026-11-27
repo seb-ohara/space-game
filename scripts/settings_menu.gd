@@ -2,6 +2,12 @@ extends Control
 
 const KEY_BINDINGS := preload("res://scripts/key_bindings.gd")
 
+class BindingCapture extends Node:
+	var capture: Callable
+
+	func _input(event: InputEvent) -> void:
+		capture.call(event)
+
 signal closed
 signal save_requested(return_home: bool)
 signal key_binding_changed
@@ -13,6 +19,7 @@ signal vsync_changed(enabled: bool)
 signal engine_volume_changed(value: float)
 
 var in_flight := true
+var test_flight := false
 var save_status: Label
 var initial_zoom := 0.25
 var minimum_zoom := 0.05
@@ -25,56 +32,100 @@ var rebinding_action := ""
 var binding_buttons := {}
 var binding_window: Window
 var binding_message: Label
+var cancel_capture: Button
+var pending_modifier := 0
+var return_hint: Label
 
-func _input(event: InputEvent) -> void:
-	_capture_binding(event)
+func _refresh_binding_labels() -> void:
+	for action in binding_buttons:
+		binding_buttons[action].text = KEY_BINDINGS.label(action)
+	return_hint.text = ("Game paused  ·  " if in_flight else "") + "%s to return" % KEY_BINDINGS.label("game_back")
+
+func _stop_capture() -> void:
+	rebinding_action = ""
+	pending_modifier = 0
+	cancel_capture.disabled = true
+	binding_message.text = "Select an action to change its binding."
+	_refresh_binding_labels()
 
 func _capture_binding(event: InputEvent) -> void:
-	if rebinding_action.is_empty() or not event is InputEventKey or not event.pressed or event.echo:
+	if rebinding_action.is_empty() or not (event is InputEventKey or event is InputEventMouseButton):
 		return
-	if event.keycode == KEY_ESCAPE:
-		binding_buttons[rebinding_action].text = InputMap.action_get_events(rebinding_action)[0].as_text()
-		rebinding_action = ""
-		binding_message.text = "Select a binding, then press a key. Escape cancels."
-	elif event.keycode not in [KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META] and event.keycode != 0:
-		for action in KEY_BINDINGS.ACTIONS:
-			if action != rebinding_action and InputMap.action_get_events(action)[0].keycode == event.keycode:
-				binding_message.text = "That key is already assigned. Choose another key."
-				get_viewport().set_input_as_handled()
-				return
-		KEY_BINDINGS.set_binding(rebinding_action, event.keycode)
-		binding_buttons[rebinding_action].text = InputMap.action_get_events(rebinding_action)[0].as_text()
-		rebinding_action = ""
-		binding_message.text = "Select a binding, then press a key. Escape cancels."
-		key_binding_changed.emit()
-	get_viewport().set_input_as_handled()
+	# Keep the visible Cancel button usable without reserving Escape or any other key.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and cancel_capture.get_global_rect().has_point(event.position):
+		return
+	binding_window.set_input_as_handled()
+	if event.is_echo():
+		return
+	var modifier_key: int = event.keycode if event is InputEventKey else 0
+	if modifier_key in KEY_BINDINGS.MODIFIERS:
+		if event.is_pressed():
+			pending_modifier = modifier_key
+			return
+		if pending_modifier != modifier_key:
+			return
+	elif not event.is_pressed():
+		return
+	pending_modifier = 0
+	if not KEY_BINDINGS.accepts(rebinding_action, event):
+		binding_message.text = "Use a key or a mouse button you can hold for this action."
+		return
+	var conflict := KEY_BINDINGS.conflict(rebinding_action, event)
+	if not conflict.is_empty():
+		binding_message.text = "Already used by %s. Try another input." % KEY_BINDINGS.ACTIONS[conflict][0]
+		return
+	KEY_BINDINGS.set_binding(rebinding_action, event)
+	_stop_capture()
+	key_binding_changed.emit()
 
 func _open_key_bindings() -> void:
 	if is_instance_valid(binding_window):
 		binding_window.popup_centered()
 		return
 	binding_window = Window.new()
-	binding_window.title = "Key bindings"
-	binding_window.size = Vector2i(480, 680)
-	binding_window.window_input.connect(_capture_binding)
+	binding_window.title = "Mouse & keyboard bindings"
+	binding_window.size = Vector2i(560, 640)
+	binding_window.transient = true
+	binding_window.exclusive = true
+	var input_capture := BindingCapture.new()
+	input_capture.capture = _capture_binding
+	binding_window.add_child(input_capture)
 	binding_window.close_requested.connect(func():
-		rebinding_action = ""
-		binding_window.queue_free()
-		binding_buttons.clear()
+		_stop_capture()
+		binding_window.hide()
 	)
 	add_child(binding_window)
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 16)
+	binding_window.add_child(margin)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 12)
+	margin.add_child(layout)
+	binding_message = Label.new()
+	binding_message.custom_minimum_size.y = 44
+	binding_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	layout.add_child(binding_message)
 	var scroll := ScrollContainer.new()
-	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	binding_window.add_child(scroll)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	layout.add_child(scroll)
 	var column := VBoxContainer.new()
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	column.add_theme_constant_override("separation", 8)
+	column.add_theme_constant_override("separation", 6)
 	scroll.add_child(column)
-	binding_message = Label.new()
-	binding_message.text = "Select a binding, then press a key. Escape cancels."
-	binding_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(binding_message)
+	var previous_scope := ""
 	for action in KEY_BINDINGS.ACTIONS:
+		if action == "flight_debug" and not OS.is_debug_build():
+			continue
+		var scope: String = KEY_BINDINGS.ACTIONS[action][1]
+		if scope != previous_scope:
+			var heading := Label.new()
+			heading.text = scope.to_upper()
+			heading.modulate = Color("90afc0")
+			column.add_child(heading)
+			previous_scope = scope
 		var row := HBoxContainer.new()
 		column.add_child(row)
 		var label := Label.new()
@@ -82,20 +133,36 @@ func _open_key_bindings() -> void:
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(label)
 		var button := Button.new()
-		button.custom_minimum_size = Vector2(140, 32)
-		button.text = InputMap.action_get_events(action)[0].as_text()
+		button.custom_minimum_size = Vector2(180, 32)
 		button.pressed.connect(func():
-			if not rebinding_action.is_empty():
-				binding_buttons[rebinding_action].text = InputMap.action_get_events(rebinding_action)[0].as_text()
+			_refresh_binding_labels()
 			rebinding_action = action
-			button.text = "Press a key..."
+			pending_modifier = 0
+			cancel_capture.disabled = false
+			binding_message.text = "Press a key or mouse button, with or without modifiers. You can also scroll the wheel."
+			button.text = "Waiting for input…"
 		)
 		binding_buttons[action] = button
 		row.add_child(button)
-	var mouse_help := Label.new()
-	mouse_help.text = "Mouse: scroll zoom · Shift-drag pan · middle click commands\nLeft click or drag to select ships · right click to move or attack"
-	mouse_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(mouse_help)
+	var footer := HBoxContainer.new()
+	layout.add_child(footer)
+	var reset := Button.new()
+	reset.text = "Restore defaults"
+	reset.pressed.connect(func():
+		KEY_BINDINGS.setup(ConfigFile.new())
+		_stop_capture()
+		key_binding_changed.emit()
+	)
+	footer.add_child(reset)
+	cancel_capture = Button.new()
+	cancel_capture.text = "Cancel rebinding"
+	cancel_capture.pressed.connect(_stop_capture)
+	footer.add_child(cancel_capture)
+	var close := Button.new()
+	close.text = "Done"
+	close.pressed.connect(func(): binding_window.close_requested.emit())
+	footer.add_child(close)
+	_stop_capture()
 	binding_window.popup_centered()
 
 func _ready() -> void:
@@ -131,10 +198,10 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 26)
 	title.add_theme_color_override("font_color", Color("e4f5ff"))
 	column.add_child(title)
-	var subtitle := Label.new()
-	subtitle.text = "Game paused  ·  Escape to return" if in_flight else "Escape to return"
-	subtitle.add_theme_color_override("font_color", Color("90afc0"))
-	column.add_child(subtitle)
+	return_hint = Label.new()
+	return_hint.add_theme_color_override("font_color", Color("90afc0"))
+	column.add_child(return_hint)
+	_refresh_binding_labels()
 	var separator := HSeparator.new()
 	column.add_child(separator)
 	var navigation := HBoxContainer.new()
@@ -177,11 +244,11 @@ func _ready() -> void:
 	else:
 		hangar_button.free()
 	var bindings_button := Button.new()
-	bindings_button.text = "Key bindings"
+	bindings_button.text = "Mouse & keyboard bindings"
 	bindings_button.pressed.connect(_open_key_bindings)
 	controls_section.add_child(bindings_button)
 	var controls_hint := Label.new()
-	controls_hint.text = "Left-click or drag to select; right-click to command. WASD pans the camera; Space centers on the selected ship."
+	controls_hint.text = "Customize flight and Ship Builder controls. Standard menu clicks and navigation are unchanged.\nTrackpad: drag up or down with two fingers to zoom in flight and in the Ship Builder. Pinch also zooms in flight."
 	controls_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls_hint.add_theme_font_size_override("font_size", 12)
 	controls_hint.add_theme_color_override("font_color", Color("90afc0"))
@@ -312,8 +379,9 @@ func _ready() -> void:
 		save_button.custom_minimum_size.y = 40.0
 		save_button.pressed.connect(func(): save_requested.emit(false))
 		save_row.add_child(save_button)
+		save_button.visible = not test_flight
 		var home_button := Button.new()
-		home_button.text = "Save and return to home"
+		home_button.text = "Return to campaign" if test_flight else "Save and return to home"
 		home_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		home_button.pressed.connect(func(): save_requested.emit(true))
 		save_row.add_child(home_button)

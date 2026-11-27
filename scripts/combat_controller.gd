@@ -37,7 +37,7 @@ func _update_combat(delta: float) -> void:
 		living += 1
 		enemy.shield_delay = maxf(0.0, enemy.shield_delay - delta)
 		if enemy.shield_delay <= 0.0:
-			enemy.shield = minf(enemy.max_shield, enemy.shield + enemy.max_shield * 0.1 * delta)
+			enemy.shield = minf(enemy.max_shield, enemy.shield + float(enemy.get("shield_recharge", enemy.max_shield * 0.1)) * delta)
 		if not enemy.hostile:
 			game._update_neutral_ship(enemy, delta)
 			continue
@@ -54,11 +54,11 @@ func _update_combat(delta: float) -> void:
 			game._steer_other_ship(enemy, aim, delta)
 		var desired_velocity = game._enemy_combat_velocity(enemy, away, distance, extra_range)
 		var current_velocity: Vector2 = enemy.velocity
-		enemy.velocity = current_velocity.move_toward(desired_velocity, game.ENEMY_ACCELERATION * delta)
+		enemy.velocity = current_velocity.move_toward(desired_velocity, float(enemy.get("acceleration", game.ENEMY_ACCELERATION)) * delta)
 		enemy.position += enemy.velocity * delta
 		enemy.fire_cooldown -= delta
 		var in_firing_range = distance >= game.ENEMY_MIN_COMBAT_RANGE + extra_range and distance <= game.ENEMY_FIRE_RANGE + extra_range
-		if in_firing_range and enemy.fire_cooldown <= 0.0 and absf(angle_difference(enemy.heading, aim.angle())) < 0.25:
+		if in_firing_range and enemy.fire_cooldown <= 0.0 and not enemy.turrets.is_empty() and absf(angle_difference(enemy.heading, aim.angle())) < 0.25:
 			game._fire_enemy_turret(enemy)
 	var aim_position = game._aim_world_position()
 	if game.firing and game.selected_weapon == 1 and game.player_fire_cooldown <= 0.0:
@@ -67,7 +67,7 @@ func _update_combat(delta: float) -> void:
 			if part.get("turret", "") == "laser" and game._turret_is_aimed(part, aim_position):
 				var origin = game._turret_world_position(part)
 				var direction = Vector2.from_angle(game._turret_angle(part))
-				game.projectiles.append({"position": origin, "velocity": direction * 800.0, "friendly": true, "damage": game.MODULES.TYPES[part.turret].weapon})
+				game.projectiles.append({"position": origin, "velocity": direction * 800.0, "friendly": true, "damage": game.MODULES.TYPES[part.turret].weapon * game._debug_weapon_factor(part.turret)})
 				fired = true
 		if fired:
 			game.player_fire_cooldown = 0.4
@@ -90,7 +90,7 @@ func _update_combat(delta: float) -> void:
 				else:
 					var muzzle = origin
 					var direction = Vector2.from_angle(angle).rotated(game.rng.randf_range(-0.035, 0.035))
-					game.projectiles.append({"position": muzzle, "velocity": direction * 1200.0 + game.velocity * 0.25, "friendly": true, "damage": 4.0, "kind": "bullet"})
+					game.projectiles.append({"position": muzzle, "velocity": direction * 1200.0 + game.velocity * 0.25, "friendly": true, "damage": 4.0 * game._debug_weapon_factor(part.turret), "kind": "bullet"})
 				fired = true
 				heritage_fired = heritage_fired or part.turret == "retro_machine_gun"
 		if fired:
@@ -103,7 +103,7 @@ func _update_combat(delta: float) -> void:
 		for part in game.cached_turret_mounts:
 			if part.get("turret", "") == "missile" and game._turret_is_aimed(part, aim_position):
 				var origin = game._turret_world_position(part)
-				var rocket = game._make_rocket(origin, game._turret_angle(part), game.velocity, true, game.MODULES.TYPES.missile.weapon, game.cached_ship_scale)
+				var rocket = game._make_rocket(origin, game._turret_angle(part), game.velocity, true, game.MODULES.TYPES.missile.weapon * game._debug_weapon_factor("missile"), game.cached_ship_scale)
 				rocket.position = origin
 				game.projectiles.append(rocket)
 				game.player_rocket_launches[game._turret_key(part)] = game.elapsed
@@ -117,12 +117,17 @@ func _update_combat(delta: float) -> void:
 				var direction = Vector2.from_angle(game._turret_angle(part))
 				var muzzle = game._turret_world_position(part)
 				game.projectiles.append({"kind": "railgun", "position": muzzle, "velocity": direction * game.RAILGUN_SPEED,
-					"friendly": true, "damage": game.MODULES.TYPES.railgun.weapon, "muzzle": muzzle})
+					"friendly": true, "damage": game.MODULES.TYPES.railgun.weapon * game._debug_weapon_factor("railgun"), "muzzle": muzzle})
 				fired = true
 		if fired:
 			game.railgun_cooldown = game.RAILGUN_COOLDOWN
 	for i in range(game.projectiles.size() - 1, -1, -1):
 		var shot: Dictionary = game.projectiles[i]
+		if not shot.has("expires"):
+			shot.expires = game.elapsed + 10.0
+		if game.elapsed >= shot.expires:
+			game.projectiles.remove_at(i)
+			continue
 		var is_rocket: bool = shot.get("kind", "") == "rocket"
 		if is_rocket:
 			game._update_rocket(shot, delta)
@@ -140,7 +145,7 @@ func _update_combat(delta: float) -> void:
 			var half_length = previous.distance_to(end) * 0.5
 			for j in range(game.enemies.size()):
 				var enemy: Dictionary = game.enemies[j]
-				if not enemy.alive:
+				if not enemy.alive or enemy.get("civilian", false):
 					continue
 				var broad_radius = float(enemy.radius) + game.SHIELD_MARGIN
 				var broad_distance = broad_radius + half_length
@@ -167,12 +172,13 @@ func _update_combat(delta: float) -> void:
 				hit = true
 				if enemy.health <= 0:
 					enemy.alive = false
+					game.missions.record_enemy_defeat(enemy)
 					game._break_up_enemy(enemy)
 					if game.selected_enemy == hit_index:
 						game.selected_enemy = -1
 						game.laser_active = false
 						game.machine_gun_active = false
-		elif game.invulnerability <= 0.0:
+		elif game.invulnerability <= 0.0 and not game.debug_tuning.invulnerable:
 			var contact: Variant = game._player_shot_contact(previous, end)
 			if contact != null and previous.distance_squared_to(contact) < closest:
 				impact_point = contact
@@ -220,7 +226,7 @@ func _update_combat(delta: float) -> void:
 				game.rocket_blasts.append({"position": impact_point, "born": game.elapsed})
 		if hit or not game._world_bounds().has_point(end):
 			game.projectiles.remove_at(i)
-	if game.ENEMY_SHIPS_ENABLED and living == 0:
+	if game._enemy_waves_enabled() and living == 0:
 		if game.enemy_wave_timer < 0.0:
 			game.enemy_wave_timer = 12.0
 		else:

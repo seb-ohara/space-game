@@ -129,7 +129,7 @@ func _exercise_spawned_miner(map: Dictionary, origin: Vector2) -> void:
 	assert(saw_mining_target and game._fleet_mining_target(wing).is_empty())
 	assert(wing.last_order.state == "completed" and wing.cargo.iron == 2)
 	assert(rock.iron == initial_ore - 2 and game.iron == 0 and game.active_fleet_index == 0)
-	assert(game._selected_ship_cargo() == {"name": wing.name, "iron": 2, "tritium": 0, "capacity": 12})
+	assert(game._selected_ship_cargo() == {"name": wing.name, "iron": 2, "tritium": 0, "capacity": 12, "contracts": 0})
 	game.selected_fleet.clear()
 	assert(game._selected_ship_cargo().is_empty())
 	game._open_fleet()
